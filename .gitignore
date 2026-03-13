@@ -1,0 +1,64 @@
+# =========================
+# Python
+# =========================
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# =========================
+# OS / Editor
+# =========================
+.DS_Store
+.vscode/
+*.swp
+
+# =========================
+# Experimental Runs (NEVER COMMIT)
+# =========================
+runs/**
+!runs/**/.keep
+!runs/.keep
+
+# GUI session cache is local operator state.
+gui/.cache/**
+!gui/.cache/.keep
+
+# =========================
+# Generated Participant Kits (NEVER COMMIT)
+# =========================
+participant_kits/**
+!participant_kits/.keep
+
+# =========================
+# Data (NEVER COMMIT PARTICIPANT DATA)
+# =========================
+
+# Raw exports (Qualtrics, surveys, etc.)
+data/raw/**
+
+# Aggregated outputs (analysis artifacts)
+data/aggregated/**
+
+# Allow folder tracking
+!data/raw/.keep
+!data/aggregated/.keep
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# Local scratch / helper files
+# =========================
+tmp_*/
+_*.py
+
+# =========================
+# Bandit / tool outputs
+# =========================
+bandit.json
+semgrep.json
+

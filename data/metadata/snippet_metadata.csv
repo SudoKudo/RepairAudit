@@ -1,0 +1,9 @@
+snippet_id,vuln_type,cwe,baseline_relpath,gold_relpath,task_short,notes
+SQLi_01,SQLi,CWE-89,snippets/baseline/SQLi/SQLi_01.py,snippets/gold/SQLi/SQLi_01.py,Login lookup uses unsafe SQL concatenation,Expect parameterized execute
+SQLi_02,SQLi,CWE-89,snippets/baseline/SQLi/SQLi_02.py,snippets/gold/SQLi/SQLi_02.py,Search endpoint builds query via f-string,Expect parameterized execute
+SQLi_03,SQLi,CWE-89,snippets/baseline/SQLi/SQLi_03.py,snippets/gold/SQLi/SQLi_03.py,Order history query uses format(),Expect parameterized execute
+SQLi_04,SQLi,CWE-89,snippets/baseline/SQLi/SQLi_04.py,snippets/gold/SQLi/SQLi_04.py,Admin filter builds SQL with user input,Expect allowlist or parameters
+CMDi_01,CMDi,CWE-78,snippets/baseline/CMDi/CMDi_01.py,snippets/gold/CMDi/CMDi_01.py,Pings a host using os.system,Expect subprocess list args
+CMDi_02,CMDi,CWE-78,snippets/baseline/CMDi/CMDi_02.py,snippets/gold/CMDi/CMDi_02.py,Archives a directory using shell=True,Expect subprocess list args
+CMDi_03,CMDi,CWE-78,snippets/baseline/CMDi/CMDi_03.py,snippets/gold/CMDi/CMDi_03.py,Greps logs via shell pipeline,Expect avoid shell or sanitize
+CMDi_04,CMDi,CWE-78,snippets/baseline/CMDi/CMDi_04.py,snippets/gold/CMDi/CMDi_04.py,Runs user-selected tool with args,Expect allowlist and list args

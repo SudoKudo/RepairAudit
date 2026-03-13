@@ -1,0 +1,75 @@
+﻿# ===============================
+# LLM Judge Configuration
+# ===============================
+
+llm_judge:
+  enabled: true
+
+  # Model configuration
+  model: "qwen2.5-coder:7b-instruct"
+
+  # Ollama endpoint
+  ollama_url: "http://localhost:11434/api/generate"
+  timeout_seconds: 90
+
+  # ===============================
+  # Prompt Strategy Controls
+  # ===============================
+  # strategy_mode: "ensemble" runs multiple strategies then votes.
+  # strategy_mode: "single" runs only primary_strategy.
+  strategy_mode: "ensemble"
+  primary_strategy: "cot"
+
+  # Strategy flags (used when strategy_mode=ensemble unless env overrides are set)
+  strategies:
+    cot:
+      enabled: true
+    zero_shot:
+      enabled: true
+    few_shot:
+      enabled: true
+    self_consistency:
+      enabled: true
+
+  # Ensemble vote policy
+  ensemble:
+    vote_rule: "majority"      # supported: majority, conservative_present, highest_confidence
+    min_confidence: 0.0
+
+  # ===============================
+  # Generation Parameters (RepairAudit-aligned)
+  # ===============================
+
+  temperature: 0.2          # Controlled randomness
+  top_p: 0.9                # Nucleus sampling threshold
+  top_k: 40                 # Limit to top 40 tokens
+  num_predict: 250          # Max new tokens
+  repeat_penalty: 1.0       # No additional repetition bias
+  frequency_penalty: 0.0    # Preserve output structure
+  presence_penalty: 0.0     # Preserve output structure
+  seed: 42                  # Reproducibility
+
+  # Retry behavior
+  max_retries: 1
+
+# ===============================
+# Evaluation Settings
+# ===============================
+
+evaluation:
+  allowed_verdicts:
+    - present
+    - absent
+    - uncertain
+
+  clamp_confidence: true
+  max_rationale_length: 600
+  max_evidence_length: 600
+
+# ===============================
+# Logging
+# ===============================
+
+logging:
+  save_raw_model_output: true
+  log_level: "INFO"

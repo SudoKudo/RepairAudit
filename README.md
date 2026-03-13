@@ -21,7 +21,7 @@ Core study idea:
 - results are judged by deterministic detectors plus optional LLM-as-a-judge
 - workflow telemetry is merged so security outcomes can be linked to behavior
 
-## 2) Repository Layout (Purpose of Each Path)
+## 2) Repository Layout
 ```text
 RepairAudit/
 |-- config.yaml                              # Runtime config (LLM judge model, strategies, generation options)
@@ -82,7 +82,7 @@ RepairAudit/
 
 ## 3) Environment Setup (Windows)
 ```powershell
-git clone <your-repo-url>
+git clone https://github.com/SudoKudo/RepairAudit.git
 cd RepairAudit
 py -3 -m venv venv
 venv\Scripts\activate
@@ -115,7 +115,7 @@ Note:
 - `venv/` is a local-only environment and is intentionally gitignored.
 - `gui/.cache/` stores local Study GUI session state and is intentionally gitignored.
 
-## 4) Pipeline Flow (Stage-by-Stage)
+## 4) Pipeline Flow
 Researcher flow:
 1. Generate participant kits.
 2. Distribute kits.
@@ -137,83 +137,26 @@ venv\Scripts\python.exe -m scripts.study_cli compute-stats
 venv\Scripts\python.exe -m scripts.study_cli build-report
 ```
 
-## 5) Code Execution Map (Which Function Runs What)
-`scripts/study_cli.py` is the command dispatcher. Each subcommand maps to one handler and then to specific modules.
+## 5) CLI Command Map
+Use the GUI first when possible. The CLI remains available for scripted or manual execution.
 
-### `start-run`
-- Handler: `cmd_start_run`
-- Core calls:
-  - `_load_snippets` (metadata input validation)
-  - `capture_env` (environment snapshot)
-  - `write_time(..., "start")` (timer start)
-  - `_copy_baselines_to_edits`
-- Outputs:
-  - `runs/<phase>/<id>/edits/*.py`
-  - `runs/<phase>/<id>/environment.json`
-  - `runs/<phase>/<id>/start_end_times.json`
-  - `runs/<phase>/<id>/condition.txt`
+### Participant kit creation
+- `build-participant-kit`: create a participant kit under `participant_kits/`
+- `make-test-runs`: generate disposable synthetic runs for testing
 
-### `analyze-run`
-- Handler: `cmd_analyze_run`
-- Core calls:
-  - `tools.analysis.analyze_edits.analyze_participant`
-  - `tools.instrumentation.diff_runner.make_diff`
-  - `tools.validators.bandit_runner.run_bandit`
-  - `tools.analysis.metrics.write_summary_files`
-- Outputs:
-  - `analysis/results.csv`, `analysis/results.json`
-  - `analysis/summary.json`, `analysis/summary.txt`
-  - `analysis/bandit.json`
-  - `diffs/*.diff`
+### Per-run analysis
+- `analyze-run`: score one participant run and write `analysis/` plus `diffs/`
+- `merge-interaction`: merge `snippet_log.csv` and participant metadata into analyzed results
 
-### `merge-interaction`
-- Handler: `cmd_merge_interaction`
-- Core calls:
-  - `load_snippet_log_csv`
-  - `merge_interaction_into_results`
-  - `interaction_features`
-- Outputs:
-  - updated `analysis/results.csv` with `llm_*` columns
-  - updated `analysis/summary.json` with `interaction` block
+### Aggregate outputs
+- `aggregate-pilot`: build `data/aggregated/pilot_summary.csv`
+- `compute-stats`: compute descriptive statistics from `pilot_summary.csv`
+- `build-report`: render the offline HTML report
 
-### `aggregate-pilot`
-- Handler: `cmd_aggregate_pilot`
-- Core behavior:
-  - scans each run summary
-  - computes throughput/variance metrics
-  - writes one row per run
-- Output:
-  - `data/aggregated/pilot_summary.csv`
+### Utilities
+- `privacy-check`: scan the repo for participant data or secret-like content before publish
 
-### `compute-stats`
-- Handler: `cmd_compute_stats`
-- Core call:
-  - `tools.analysis.stats.write_pilot_stats_text`
-- Output:
-  - `data/aggregated/pilot_stats.txt`
-
-### `build-report`
-- Handler: `cmd_build_report`
-- Core call:
-  - `tools.reporting.html_report.build_aggregated_report_offline`
-- Output:
-  - `data/aggregated/report.html`
-
-### `build-participant-kit`
-- Handler: `cmd_build_participant_kit`
-- Core call:
-  - `scripts.participant_kit.build_participant_kit`
-- Output:
-  - `participant_kits/<participant_id>/...` (full participant package)
-
-### `privacy-check`
-- Handler: `cmd_privacy_check`
-- Core call:
-  - `scripts.privacy_check.run_prepublish_check`
-- Output:
-  - pass/fail report in terminal (non-zero exit on failure)
-
-## 6) Data Contracts (What Must Exist)
+## 6) Data Contracts
 ### 6.1 Snippet metadata contract
 File: `data/metadata/snippet_metadata.csv`
 
@@ -262,7 +205,18 @@ Important behavior:
 
 ## 8) Participant Kit Generation and Behavior
 ### 8.1 Build kits
-CLI:
+GUI (primary option):
+```powershell
+venv\Scripts\python.exe gui\kit_builder_gui.py
+```
+Use the GUI to:
+- choose output folder, condition, phase, and model settings
+- preview participant IDs before writing folders
+- create one or more participant kits in one pass
+
+![Kit Builder GUI](docs/figures/Kit_Builder_GUI.png)
+
+CLI (secondary option):
 ```powershell
 venv\Scripts\python.exe -m scripts.study_cli build-participant-kit ^
   --participant_id P101 ^
@@ -276,12 +230,6 @@ Default behavior:
 - GUI defaults to `security`.
 - CLI defaults to `security` if `--condition` is not provided.
 
-GUI:
-```powershell
-venv\Scripts\python.exe gui\kit_builder_gui.py
-venv\Scripts\python.exe gui\study_gui.py
-```
-
 ### 8.2 What is inside a kit
 ```text
 participant_kits/<participant_id>/
@@ -289,10 +237,13 @@ participant_kits/<participant_id>/
 |-- study_config.lock.json
 |-- participant_web_app.py
 |-- Launch_Study_Web_App.bat
+|-- Launch_Study_Web_App.sh
 |-- package_submission.py
+|-- exports/
 `-- run_<phase>_<participant_id>/
     |-- baseline/*.py
     |-- edits/*.py
+    |-- logs/participant_profile.json
     |-- logs/snippet_log.csv
     |-- logs/chat_log.jsonl
     |-- condition.txt
@@ -329,7 +280,7 @@ participant_kits/<participant_id>/
 Primary file:
 - `config.yaml`
 
-Current strategy options:
+Prompt strategies:
 - `cot`
 - `zero_shot`
 - `few_shot`
@@ -346,7 +297,7 @@ Where prompts are built:
   - `_build_prompt`
   - `_resolve_strategy_plan`
 
-## 10) How to Make Common Changes (Safe Playbook)
+## 10) How to Make Common Changes
 ### 10.1 Add new snippets
 1. Add baseline and gold `.py` files.
 2. Add metadata row with valid paths and `vuln_type/cwe`.
@@ -388,8 +339,23 @@ Then rebuild:
 venv\Scripts\python.exe -m scripts.study_cli build-report --phase pilot
 ```
 
-## 11) Full Researcher Runbook
-### 11.1 Receive participant zip and ingest
+## 11) Researcher Runbook
+### 11.1 Preferred workflow: Study GUI
+```powershell
+venv\Scripts\python.exe gui\study_gui.py
+```
+Use the Study GUI to:
+1. Set `Phase`, `Metadata CSV`, and judge strategy settings.
+2. Extract returned participant ZIPs into `runs/<phase>/`.
+3. Click `Refresh Participants` to load the current run folders.
+4. Review the combined participant/pipeline status table.
+5. Use `Start Analysis` to run analyze, merge, aggregate, stats, and report generation for the selected phase.
+6. Use `Open HTML Report` after the run completes.
+
+![Research Console GUI](docs/figures/Research_Console_GUI.png)
+
+### 11.2 Equivalent CLI workflow
+#### Receive participant zip and ingest
 1. Extract the returned submission ZIP into `runs/<phase>/`.
 2. Verify required files exist under `runs/<phase>/<participant_id>/`:
    - `edits/*.py`
@@ -397,13 +363,13 @@ venv\Scripts\python.exe -m scripts.study_cli build-report --phase pilot
    - `logs/chat_log.jsonl`
    - `condition.txt`
 
-### 11.2 Analyze one participant
+#### Analyze one participant
 ```powershell
 venv\Scripts\python.exe -m scripts.study_cli analyze-run --participant_id P101 --phase pilot --metadata_csv data/metadata/snippet_metadata.csv
 venv\Scripts\python.exe -m scripts.study_cli merge-interaction --run_dir runs/pilot/P101
 ```
 
-### 11.3 Aggregate all participants and build outputs
+#### Aggregate all participants and build outputs
 ```powershell
 venv\Scripts\python.exe -m scripts.study_cli aggregate-pilot
 venv\Scripts\python.exe -m scripts.study_cli compute-stats --in_csv data/aggregated/pilot_summary.csv
@@ -495,19 +461,3 @@ Re-run in order:
 3. `aggregate-pilot`
 4. `compute-stats`
 5. `build-report`
-
-## 17) Lean Repo Policy
-This repository keeps:
-- one active runtime config (`config.yaml`)
-- one unified CLI (`scripts/study_cli.py`)
-- one participant app template (`scripts/participant_web_app_template.py`)
-
-This avoids split logic, duplicate command paths, and stale legacy behavior.
-
-
-
-
-
-
-
-

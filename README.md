@@ -84,9 +84,9 @@ RepairAudit/
 ```powershell
 git clone https://github.com/SudoKudo/RepairAudit.git
 cd RepairAudit
-py -3 -m venv venv
-venv\Scripts\activate
-venv\Scripts\python.exe -m pip install -r requirements.txt
+py -3 -m venv .venv
+.venv\Scripts\activate
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 If `py` is unavailable on your machine, use your installed Python launcher for
 that one environment-creation step. After the environment exists, use

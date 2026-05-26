@@ -111,6 +111,12 @@ def _normalize_verdict(v: Any) -> str:
     return text if text in {"present", "absent", "uncertain"} else "uncertain"
 
 
+def _normalize_present_verdict(v: Any) -> str:
+    """Normalize verdict strings while preserving blank/missing values."""
+    text = str(v or "").strip().lower()
+    return text if text in {"present", "absent", "uncertain"} else ""
+
+
 def _outcome_from_verdict(v: str) -> str:
     """Map judge verdict labels into study outcome labels."""
     if v == "absent":
@@ -122,8 +128,8 @@ def _outcome_from_verdict(v: str) -> str:
 
 def _derive_primary_outcome(row: Dict[str, Any]) -> str:
     """Determine primary outcome, preferring judge verdict when available."""
-    verdict = _normalize_verdict(row.get("judge_verdict"))
-    if verdict in {"absent", "present", "uncertain"}:
+    verdict = _normalize_present_verdict(row.get("judge_verdict"))
+    if verdict:
         return _outcome_from_verdict(verdict)
 
     detector_outcome = (row.get("outcome") or "").strip()
@@ -155,12 +161,51 @@ def _extract_per_strategy_results(row: Dict[str, Any]) -> Dict[str, Dict[str, An
     return out
 
 
-def _snippet_paths(repo_root: Path, snippet_id: str) -> Tuple[Path, Path]:
-    """Resolve baseline and gold snippet paths from snippet_id."""
-    prefix = snippet_id.split("_", 1)[0]
-    baseline = repo_root / "snippets" / "baseline" / prefix / f"{snippet_id}.py"
-    gold = repo_root / "snippets" / "gold" / prefix / f"{snippet_id}.py"
-    return baseline, gold
+def _parse_iso_ts(value: Any) -> datetime | None:
+    """Parse ISO timestamps and accept trailing Z UTC notation."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except Exception:
+        return None
+
+
+def _judge_strategy_filter_value(*, per_strategy: Dict[str, Dict[str, Any]], judge_strategy: str, has_judge_verdict: bool) -> str:
+    """Build the filter token payload used by the report's strategy dropdown."""
+    if per_strategy:
+        return "|".join(sorted(per_strategy.keys()))
+    if not has_judge_verdict:
+        return ""
+    return judge_strategy or "single"
+
+
+def _snippet_paths(repo_root: Path, row: Dict[str, Any], edits_dir: Path) -> Tuple[Path, Path, Path]:
+    """Resolve baseline, gold, and edited paths from result-row metadata when available."""
+    snippet_id = str(row.get("snippet_id", "")).strip()
+    baseline_rel = str(row.get("baseline_relpath", "") or "").strip()
+    gold_rel = str(row.get("gold_relpath", "") or "").strip()
+    edited_name = str(row.get("edited_filename", "") or "").strip()
+
+    if baseline_rel:
+        baseline = repo_root / baseline_rel
+        edited = edits_dir / (edited_name or baseline.name)
+    else:
+        prefix = snippet_id.split("_", 1)[0]
+        fallback_name = edited_name or f"{snippet_id}.py"
+        baseline = repo_root / "snippets" / "baseline" / prefix / fallback_name
+        edited = edits_dir / fallback_name
+
+    if gold_rel:
+        gold = repo_root / gold_rel
+    else:
+        prefix = snippet_id.split("_", 1)[0]
+        gold = repo_root / "snippets" / "gold" / prefix / baseline.name
+
+    return baseline, gold, edited
 
 
 def discover_runs(runs_root: Path) -> List[RunPaths]:
@@ -206,8 +251,10 @@ def _collect_strategy_rows(all_rows: List[Dict[str, Any]]) -> List[Dict[str, Any
                     }
                 )
         else:
+            verdict = _normalize_present_verdict(row.get("judge_verdict"))
+            if not verdict:
+                continue
             strategy = (row.get("judge_strategy") or "single").strip() or "single"
-            verdict = _normalize_verdict(row.get("judge_verdict"))
             out.append(
                 {
                     "strategy": strategy,
@@ -272,11 +319,15 @@ def _run_duration_seconds(run_dir: Path) -> float:
         return 0.0
     try:
         obj = json.loads(p.read_text(encoding="utf-8"))
-        start = str(obj.get("start", "") or "").strip()
-        end = str(obj.get("end", "") or "").strip()
-        if not start or not end:
+        active = obj.get("active_seconds")
+        if active is not None:
+            return max(0.0, float(active))
+
+        start_dt = _parse_iso_ts(obj.get("start"))
+        end_dt = _parse_iso_ts(obj.get("end"))
+        if start_dt is None or end_dt is None:
             return 0.0
-        return max(0.0, (datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds())
+        return max(0.0, (end_dt - start_dt).total_seconds())
     except Exception:
         return 0.0
 
@@ -299,8 +350,10 @@ def _time_to_first_secure_fix_seconds(run_dir: Path, rows: List[Dict[str, Any]],
     try:
         run_obj = json.loads(times_path.read_text(encoding="utf-8"))
         snippet_obj = json.loads(snippet_path.read_text(encoding="utf-8"))
-        run_start = datetime.fromisoformat(str(run_obj.get("start", "") or ""))
+        run_start = _parse_iso_ts(run_obj.get("start"))
     except Exception:
+        return None
+    if run_start is None:
         return None
 
     mitigated_ids = [
@@ -319,10 +372,9 @@ def _time_to_first_secure_fix_seconds(run_dir: Path, rows: List[Dict[str, Any]],
         end_raw = str(item.get("end", "") or "").strip()
         if not end_raw:
             continue
-        try:
-            end_times.append(datetime.fromisoformat(end_raw))
-        except Exception:
-            continue
+        end_dt = _parse_iso_ts(end_raw)
+        if end_dt is not None:
+            end_times.append(end_dt)
 
     if not end_times:
         return None
@@ -442,7 +494,7 @@ def _compute_filter_values(all_rows: List[Dict[str, Any]], strategy_rows: List[D
         "conditions": _uniq([r.get("condition", "") for r in all_rows]),
         "vuln_types": _uniq([r.get("vuln_type", "") for r in all_rows]),
         "primary_outcomes": _uniq([r.get("primary_outcome", "") for r in all_rows]),
-        "judge_verdicts": _uniq([r.get("judge_verdict", "") for r in all_rows]),
+        "judge_verdicts": _uniq([r.get("judge_verdict_filter", "") for r in all_rows]),
         "judge_strategies": _uniq([r.get("strategy", "") for r in strategy_rows]),
     }
 
@@ -496,18 +548,27 @@ def build_aggregated_report_offline(
             if not snippet_id:
                 continue
 
-            baseline_path, gold_path = _snippet_paths(repo_root, snippet_id)
-            edited_path = rp.edits_dir / f"{snippet_id}.py"
+            baseline_path, gold_path, edited_path = _snippet_paths(repo_root, row, rp.edits_dir)
 
             baseline_code = _read_text(baseline_path)
             edited_code = _read_text(edited_path)
             gold_code = _read_text(gold_path)
 
             per_strategy = _extract_per_strategy_results(row)
+            judge_verdict = _normalize_present_verdict(row.get("judge_verdict"))
             judge_strategy = (row.get("judge_strategy") or "").strip()
             judge_strategy_display = judge_strategy
             if judge_strategy == "ensemble" and per_strategy:
                 judge_strategy_display = "ensemble (" + ", ".join(sorted(per_strategy.keys())) + ")"
+            elif not judge_verdict:
+                judge_strategy_display = "n/a"
+            elif not judge_strategy_display:
+                judge_strategy_display = "single"
+            judge_strategy_filter = _judge_strategy_filter_value(
+                per_strategy=per_strategy,
+                judge_strategy=judge_strategy,
+                has_judge_verdict=bool(judge_verdict),
+            )
 
             # Start from CSV row values, then attach richer typed fields used by the report.
             enriched: Dict[str, Any] = dict(row)
@@ -517,6 +578,8 @@ def build_aggregated_report_offline(
                     "condition": condition,
                     "primary_outcome": _derive_primary_outcome(row),
                     "judge_strategy_display": judge_strategy_display,
+                    "judge_strategy_filter": judge_strategy_filter,
+                    "judge_verdict_filter": judge_verdict,
                     "per_strategy_results": per_strategy,
                     "baseline_path": str(baseline_path),
                     "edited_path": str(edited_path),
@@ -759,14 +822,14 @@ _TEMPLATE = r"""<!doctype html>
         </tr></thead>
         <tbody>
           {% for r in all_rows %}
-          <tr data-run="{{ r.run_id }}" data-condition="{{ r.condition }}" data-vuln="{{ r.vuln_type }}" data-outcome="{{ r.primary_outcome }}" data-verdict="{{ r.judge_verdict }}" data-strategy="{{ r.judge_strategy }}">
+          <tr data-run="{{ r.run_id }}" data-condition="{{ r.condition }}" data-vuln="{{ r.vuln_type }}" data-outcome="{{ r.primary_outcome }}" data-verdict="{{ r.judge_verdict_filter }}" data-strategy="{{ r.judge_strategy_filter }}">
             <td>{{ r.run_id }}</td>
             <td>{{ r.condition }}</td>
             <td><span class="pill">{{ r.snippet_id }}</span></td>
             <td>{{ r.vuln_type }}</td>
             <td>{% if r.primary_outcome == 'Mitigated' %}<span class="badge b-good">Mitigated</span>{% elif r.primary_outcome == 'Preserved' %}<span class="badge b-bad">Preserved</span>{% elif r.primary_outcome == 'UNKNOWN' %}<span class="badge b-warn">UNKNOWN</span>{% else %}<span class="badge b-info">{{ r.primary_outcome }}</span>{% endif %}</td>
-            <td>{% if r.judge_verdict == 'absent' %}<span class="badge b-good">absent</span>{% elif r.judge_verdict == 'present' %}<span class="badge b-bad">present</span>{% else %}<span class="badge b-warn">{{ r.judge_verdict }}</span>{% endif %}</td>
-            <td>{{ r.judge_confidence }}</td>
+            <td>{% if r.judge_verdict_filter == 'absent' %}<span class="badge b-good">absent</span>{% elif r.judge_verdict_filter == 'present' %}<span class="badge b-bad">present</span>{% elif r.judge_verdict_filter == 'uncertain' %}<span class="badge b-warn">uncertain</span>{% else %}<span class="badge b-info">n/a</span>{% endif %}</td>
+            <td>{% if r.judge_verdict_filter %}{{ r.judge_confidence }}{% endif %}</td>
             <td>{{ r.judge_strategy_display }}</td>
             <td class="behavior-col">{{ r.llm_turns }}</td>
             <td class="behavior-col">{{ r.llm_applied_ratio }}</td>
@@ -880,13 +943,14 @@ _TEMPLATE = r"""<!doctype html>
       for(let i=0;i<rows.length;i++){
         const tr = rows[i];
         if(tr.classList.contains("expand-row")){ tr.style.display="none"; continue; }
+        const strategyTokens = ((tr.getAttribute("data-strategy") || "").split("|")).filter(Boolean);
         const matches =
           (!fRun || (tr.getAttribute("data-run")||"")===fRun) &&
           (!fCondition || (tr.getAttribute("data-condition")||"")===fCondition) &&
           (!fVuln || (tr.getAttribute("data-vuln")||"")===fVuln) &&
           (!fOutcome || (tr.getAttribute("data-outcome")||"")===fOutcome) &&
           (!fVerdict || (tr.getAttribute("data-verdict")||"")===fVerdict) &&
-          (!fStrategy || (tr.getAttribute("data-strategy")||"")===fStrategy) &&
+          (!fStrategy || strategyTokens.includes(fStrategy)) &&
           (!q || tr.textContent.toLowerCase().includes(q));
         tr.style.display = matches ? "" : "none";
         const next = tr.nextElementSibling;

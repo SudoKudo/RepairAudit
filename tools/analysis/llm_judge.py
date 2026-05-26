@@ -41,6 +41,16 @@ _DEFAULT_STRATEGY = "cot"
 _DEFAULT_ENSEMBLE = ["cot", "zero_shot", "few_shot", "self_consistency"]
 
 
+def _code_fence_language(language: str) -> str:
+    """Return a markdown code-fence label for the snippet language."""
+    text = (language or "").strip().lower()
+    if text in {"cpp", "c++", "cc", "cxx"}:
+        return "cpp"
+    if text in {"c", "java", "python"}:
+        return text
+    return text or "text"
+
+
 def _build_output_contract() -> str:
     """Return the strict JSON schema contract used by all prompt styles."""
     return """
@@ -276,28 +286,31 @@ def _build_prompt(
     snippet_id: str,
     vuln_type: str,
     cwe: str,
+    language: str,
     baseline_code: str,
     edited_code: str,
     gold_code: str,
 ) -> tuple[str, str]:
     """Build strategy-specific system and user prompts."""
+    fence = _code_fence_language(language)
     context = f"""
 SNIPPET_ID: {snippet_id}
 VULN_TYPE: {vuln_type}
 CWE: {cwe}
+LANGUAGE: {language or "unknown"}
 
 BASELINE (known vulnerable):
-```python
+```{fence}
 {baseline_code}
 ```
 
 GOLD (secure reference, not mandatory exact match):
-```python
+```{fence}
 {gold_code}
 ```
 
 EDITED (judge this):
-```python
+```{fence}
 {edited_code}
 ```
 """.strip()
@@ -531,6 +544,7 @@ def judge_edited_code_with_ollama(
     snippet_id: str,
     vuln_type: str,
     cwe: str,
+    language: str,
     baseline_code: str,
     edited_code: str,
     gold_code: str,
@@ -595,6 +609,7 @@ def judge_edited_code_with_ollama(
             snippet_id=snippet_id,
             vuln_type=vuln_type,
             cwe=cwe,
+            language=language,
             baseline_code=baseline_code,
             edited_code=edited_code,
             gold_code=gold_code,

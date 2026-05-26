@@ -1,6 +1,6 @@
 # RepairAudit: Auditing Human-LLM Vulnerability Mitigation in Code Repair Workflows
 
-Repository for a controlled experiment on how humans edit vulnerable Python snippets with LLM assistance.
+Repository for a controlled experiment on how people repair vulnerable code with LLM assistance.
 
 This README is the operator and developer handbook for the full pipeline: kit generation, participant collection, analysis, aggregation, and reporting.
 
@@ -17,9 +17,13 @@ Vulnerability scope:
 
 Core study idea:
 - baseline snippets are intentionally vulnerable starting points
-- participants edit those snippets with LLM assistance
+- participants review those snippets and submit repaired code with LLM assistance
 - results are judged by deterministic detectors plus optional LLM-as-a-judge
 - workflow telemetry is merged so security outcomes can be linked to behavior
+
+Scope note:
+- the checked-in sample corpus currently includes Python, Java, C, and C++
+- the workflow is organized around snippet metadata and source-file paths so new datasets can extend to other programming languages without changing the participant/researcher split
 
 ## 2) Repository Layout
 ```text
@@ -48,6 +52,7 @@ RepairAudit/
 |   |   |-- llm_judge.py                     # Strategy-aware LLM judge + prompt construction
 |   |   |-- interaction.py                   # Merge snippet_log.csv fields into results.csv
 |   |   |-- metrics.py                       # Build summary.json and summary.txt from results.csv
+|   |   |-- modeling.py                      # Snippet-level modeling dataset + local fixed-effects logit
 |   |   |-- stats.py                         # Aggregate descriptive/inferential stats helpers
 |   |   `-- __init__.py
 |   |
@@ -93,6 +98,15 @@ that one environment-creation step. After the environment exists, use
 `venv\Scripts\python.exe` for all project commands so the pipeline does not
 depend on global PATH state.
 
+Researcher-side judge requirement:
+- if `llm_judge.enabled` stays `true` in `config.yaml`, the analysis pipeline also expects a local Ollama server
+- pull the configured model and start Ollama before running `analyze-run`, the Study GUI, or any full aggregation workflow:
+```powershell
+ollama pull qwen2.5-coder:7b-instruct
+ollama serve
+```
+- if you do not want judge-backed scoring for a run, set `llm_judge.enabled: false` first
+
 Dependencies in `requirements.txt`:
 - `bandit>=1.7.0`
 - `pandas>=2.0.0`
@@ -125,7 +139,8 @@ Researcher flow:
 6. Merge interaction logs.
 7. Aggregate pilot metrics.
 8. Compute stats.
-9. Build HTML report.
+9. Compute snippet-level models.
+10. Build HTML report.
 
 One-command map (high level):
 ```powershell
@@ -134,6 +149,7 @@ venv\Scripts\python.exe -m scripts.study_cli analyze-run ...
 venv\Scripts\python.exe -m scripts.study_cli merge-interaction ...
 venv\Scripts\python.exe -m scripts.study_cli aggregate-pilot
 venv\Scripts\python.exe -m scripts.study_cli compute-stats
+venv\Scripts\python.exe -m scripts.study_cli compute-models
 venv\Scripts\python.exe -m scripts.study_cli build-report
 ```
 
@@ -151,6 +167,7 @@ Use the GUI first when possible. The CLI remains available for scripted or manua
 ### Aggregate outputs
 - `aggregate-pilot`: build `data/aggregated/pilot_summary.csv`
 - `compute-stats`: compute descriptive statistics from `pilot_summary.csv`
+- `compute-models`: build snippet-level modeling data and a local mitigation model summary
 - `build-report`: render the offline HTML report
 
 ### Utilities
@@ -168,6 +185,7 @@ Columns used by analysis/judge:
 - `snippet_id`
 - `vuln_type`
 - `cwe`
+- `language`
 - `baseline_relpath`
 - `gold_relpath`
 
@@ -177,7 +195,7 @@ Recommended descriptive columns:
 
 ### 6.2 Run folder contract
 Each analyzed run should contain:
-- `runs/<phase>/<participant_id>/edits/*.py`
+- `runs/<phase>/<participant_id>/edits/*`
 - `runs/<phase>/<participant_id>/logs/snippet_log.csv`
 - `runs/<phase>/<participant_id>/logs/chat_log.jsonl`
 - `runs/<phase>/<participant_id>/condition.txt`
@@ -201,6 +219,7 @@ Update process:
 
 Important behavior:
 - New kits reflect whatever metadata/baseline files exist at generation time.
+- Kits preserve the source filename and extension recorded in metadata-derived paths.
 - Existing kits are snapshots and do not auto-update.
 
 ## 8) Participant Kit Generation and Behavior
@@ -214,7 +233,8 @@ Use the GUI to:
 - preview participant IDs before writing folders
 - create one or more participant kits in one pass
 
-![Kit Builder GUI](docs/figures/Kit_Builder_GUI.png)
+![Participant Kit Builder GUI](docs/figures/Participant_Kit_Gui.png)
+*Figure 1. Participant Kit Builder GUI for selecting run settings and generating participant kits.*
 
 CLI (secondary option):
 ```powershell
@@ -235,14 +255,15 @@ Default behavior:
 participant_kits/<participant_id>/
 |-- README.md
 |-- study_config.lock.json
+|-- kit_manifest.json
 |-- participant_web_app.py
 |-- Launch_Study_Web_App.bat
 |-- Launch_Study_Web_App.sh
 |-- package_submission.py
 |-- exports/
 `-- run_<phase>_<participant_id>/
-    |-- baseline/*.py
-    |-- edits/*.py
+    |-- baseline/*
+    |-- edits/*
     |-- logs/participant_profile.json
     |-- logs/snippet_log.csv
     |-- logs/chat_log.jsonl
@@ -251,26 +272,29 @@ participant_kits/<participant_id>/
 ```
 
 ### 8.3 Participant web app notes
-- Web app is dynamic by snippet list, not hardcoded to 8 snippets.
+- Web app is driven by the snippet list in the kit, not by a fixed snippet count.
 - Snippet content is loaded per snippet request, not all code at once.
-- Participants do all task work inside the browser app: edit code, use Ollama, save snippet summaries, and build the return ZIP.
+- Participants review the baseline pane as read-only reference, use the assigned in-app LLM chat, and paste the final repaired answer into the submission box that will be graded/exported.
+- Participants do all task work inside the browser app: use Ollama, save snippet summaries, and build the return ZIP.
 
 ### 8.4 Distribute a participant kit
 1. Build the kit into `participant_kits/<participant_id>/`.
 2. Zip that folder or send the folder as-is.
 3. Tell the participant to:
+   - make sure Python is installed on the machine that will launch the kit
+   - treat that Python requirement as a launcher/runtime requirement, not as a restriction on snippet language
    - install Ollama
    - run `ollama pull <assigned model>` once
    - keep `ollama serve` running while completing the study
    - launch `Launch_Study_Web_App.bat`
-   - complete every snippet and use `Finish (Build ZIP)` at the end
+   - complete every assigned snippet and use `Finish (Build ZIP)` at the end
 4. The participant returns the ZIP created in the kit's `exports/` folder.
 
 ### 8.5 Receive a completed participant return
 1. Copy the returned ZIP into a temporary staging location.
 2. Extract it into `runs/<phase>/` so the extracted folder becomes `runs/<phase>/<participant_id>/`.
 3. Verify the extracted run contains:
-   - `edits/*.py`
+   - `edits/*`
    - `logs/snippet_log.csv`
    - `logs/chat_log.jsonl`
    - `condition.txt`
@@ -299,8 +323,8 @@ Where prompts are built:
 
 ## 10) How to Make Common Changes
 ### 10.1 Add new snippets
-1. Add baseline and gold `.py` files.
-2. Add metadata row with valid paths and `vuln_type/cwe`.
+1. Add baseline and gold source files for the target dataset language.
+2. Add metadata row with valid paths, `vuln_type/cwe`, and `language`.
 3. Generate a fresh kit.
 4. Run:
    - `analyze-run` on one test run
@@ -322,13 +346,15 @@ Edit:
 Then rerun:
 - `analyze-run`
 - `aggregate-pilot`
+- `compute-models`
 - `build-report`
 
 ### 10.4 Add a new aggregate metric
 1. Compute metric in `scripts/study_cli.py` inside `cmd_aggregate_pilot`.
 2. Add column to `fieldnames`.
 3. Update `tools/analysis/stats.py` if metric should appear in statistical summary.
-4. Update `tools/reporting/html_report.py` to display/filter it.
+4. Update `tools/analysis/modeling.py` if the metric should feed snippet-level models.
+5. Update `tools/reporting/html_report.py` to display/filter it.
 
 ### 10.5 Change report layout
 Edit:
@@ -340,6 +366,10 @@ venv\Scripts\python.exe -m scripts.study_cli build-report --phase pilot
 ```
 
 ## 11) Researcher Runbook
+Before you analyze returned runs:
+- confirm that your Python environment is ready
+- if the judge is enabled, make sure Ollama is running with the model named in `config.yaml`
+
 ### 11.1 Preferred workflow: Study GUI
 ```powershell
 venv\Scripts\python.exe gui\study_gui.py
@@ -347,18 +377,19 @@ venv\Scripts\python.exe gui\study_gui.py
 Use the Study GUI to:
 1. Set `Phase`, `Metadata CSV`, and judge strategy settings.
 2. Extract returned participant ZIPs into `runs/<phase>/`.
-3. Click `Refresh Participants` to load the current run folders.
+3. Click `Refresh` to load the current run folders.
 4. Review the combined participant/pipeline status table.
 5. Use `Start Analysis` to run analyze, merge, aggregate, stats, and report generation for the selected phase.
 6. Use `Open HTML Report` after the run completes.
 
 ![Research Console GUI](docs/figures/Research_Console_GUI.png)
+*Figure 2. Research Console GUI for phase selection, run-status review, and pipeline execution.*
 
 ### 11.2 Equivalent CLI workflow
 #### Receive participant zip and ingest
 1. Extract the returned submission ZIP into `runs/<phase>/`.
 2. Verify required files exist under `runs/<phase>/<participant_id>/`:
-   - `edits/*.py`
+   - `edits/*`
    - `logs/snippet_log.csv`
    - `logs/chat_log.jsonl`
    - `condition.txt`
@@ -373,6 +404,7 @@ venv\Scripts\python.exe -m scripts.study_cli merge-interaction --run_dir runs/pi
 ```powershell
 venv\Scripts\python.exe -m scripts.study_cli aggregate-pilot
 venv\Scripts\python.exe -m scripts.study_cli compute-stats --in_csv data/aggregated/pilot_summary.csv
+venv\Scripts\python.exe -m scripts.study_cli compute-models --runs_root runs/pilot
 venv\Scripts\python.exe -m scripts.study_cli build-report --phase pilot --out_html data/aggregated/report.html
 ```
 
@@ -387,7 +419,14 @@ Per participant:
 Aggregated:
 - `data/aggregated/pilot_summary.csv`
 - `data/aggregated/pilot_stats.txt`
+- `data/aggregated/pilot_model_data.csv`
+- `data/aggregated/pilot_models.json`
+- `data/aggregated/pilot_models.txt`
 - `data/aggregated/report.html`
+
+Modeling note:
+- `pilot_model_data.csv` uses de-identified participant labels (`participant_001`, `participant_002`, ...) rather than raw run folder names.
+- `compute-models` currently fits a local fixed-effects logistic model with participant, snippet, language, and vulnerability-type controls.
 
 Aggregate metrics currently emitted:
 - `mitigations_per_minute`
@@ -411,6 +450,7 @@ Synthetic pipeline smoke test:
 venv\Scripts\python.exe -m scripts.study_cli make-test-runs --core-only
 venv\Scripts\python.exe -m scripts.study_cli aggregate-pilot
 venv\Scripts\python.exe -m scripts.study_cli compute-stats
+venv\Scripts\python.exe -m scripts.study_cli compute-models
 venv\Scripts\python.exe -m scripts.study_cli build-report
 ```
 

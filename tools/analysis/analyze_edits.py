@@ -68,6 +68,22 @@ def _normalize_vuln_type(v: str) -> str:
     return v_norm
 
 
+def _language_from_metadata(item: dict[str, str], baseline_path: Path | None) -> str:
+    """Resolve snippet language from metadata or baseline-file extension."""
+    declared = (item.get("language") or "").strip().lower()
+    if declared:
+        return declared
+    suffix = (baseline_path.suffix.lower() if baseline_path else "")
+    return {
+        ".py": "python",
+        ".java": "java",
+        ".c": "c",
+        ".cc": "cpp",
+        ".cpp": "cpp",
+        ".cxx": "cpp",
+    }.get(suffix, suffix.lstrip(".") or "text")
+
+
 def _judge_enabled_from_config() -> bool:
     """Read `llm_judge.enabled` from config with a safe fallback."""
     try:
@@ -114,17 +130,20 @@ def analyze_participant(run_dir: str, metadata_csv: str, save_csv: bool = True) 
 
         baseline_path = Path(baseline_rel) if baseline_rel else None
         gold_path = Path(gold_rel) if gold_rel else None
-        edited_path = edits_dir / f"{snippet_id}.py"
+        edited_path = edits_dir / (baseline_path.name if baseline_path and baseline_path.name else f"{snippet_id}.txt")
+        language = _language_from_metadata(item, baseline_path)
 
         row_base: Dict[str, Any] = {
             "participant_id": participant_id,
             "phase": phase,
             "condition": condition,
             "snippet_id": snippet_id,
+            "language": language,
             "vuln_type": vuln_type_raw,
             "cwe": cwe,
             "baseline_relpath": baseline_rel,
             "gold_relpath": gold_rel,
+            "edited_filename": edited_path.name,
         }
 
         print(
@@ -156,12 +175,12 @@ def analyze_participant(run_dir: str, metadata_csv: str, save_csv: bool = True) 
 
         # Run the vulnerability-specific deterministic detector pair.
         if vuln_type == "SQLI":
-            before = detect_sqli(baseline_text)
-            after = detect_sqli(edited_text)
+            before = detect_sqli(baseline_text, language=language)
+            after = detect_sqli(edited_text, language=language)
             judge_vuln_type = "SQLi"
         elif vuln_type == "CMDI":
-            before = detect_cmdi(baseline_text)
-            after = detect_cmdi(edited_text)
+            before = detect_cmdi(baseline_text, language=language)
+            after = detect_cmdi(edited_text, language=language)
             judge_vuln_type = "CMDi"
         else:
             print(f"[analyze] snippet={snippet_id} status=unknown_vuln_type", flush=True)
@@ -195,6 +214,7 @@ def analyze_participant(run_dir: str, metadata_csv: str, save_csv: bool = True) 
                 snippet_id=snippet_id,
                 vuln_type=judge_vuln_type,
                 cwe=cwe,
+                language=language,
                 baseline_code=baseline_text,
                 edited_code=edited_text,
                 gold_code=gold_text or "",
@@ -243,6 +263,7 @@ def analyze_participant(run_dir: str, metadata_csv: str, save_csv: bool = True) 
             "phase",
             "condition",
             "snippet_id",
+            "language",
             "vuln_type",
             "cwe",
             "before_verdict",
@@ -263,6 +284,7 @@ def analyze_participant(run_dir: str, metadata_csv: str, save_csv: bool = True) 
             "judge_rationale",
             "baseline_relpath",
             "gold_relpath",
+            "edited_filename",
         ]
         all_keys = {k for r in results for k in r.keys()}
         fieldnames = preferred + [k for k in sorted(all_keys) if k not in preferred]

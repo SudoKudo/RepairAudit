@@ -91,7 +91,7 @@ PROMPT_STRATEGY_OPTIONS = [
 PROMPT_STRATEGY_VALUES = {value for value, _label in PROMPT_STRATEGY_OPTIONS}
 PARTICIPANT_PROFILE_OPTIONS = {
     "programming_experience": ["<1 year", "1-2 years", "3-5 years", "6+ years"],
-    "python_experience": ["none", "basic", "intermediate", "advanced"],
+    "language_experience": ["none", "basic", "intermediate", "advanced"],
     "llm_coding_experience": ["never", "rarely", "monthly", "weekly", "daily"],
     "security_experience": ["none", "self-taught", "coursework", "professional"],
 }
@@ -106,6 +106,7 @@ class StudyStore:
     """
 
     def __init__(self, kit_root: Path) -> None:
+        """Bind the participant kit paths and load the locked study configuration."""
         self.kit_root = kit_root
         self.lock_path = kit_root / "study_config.lock.json"
         self.readme_path = kit_root / "README.md"
@@ -118,6 +119,7 @@ class StudyStore:
         self.log_csv = self.run_dir / "logs" / "snippet_log.csv"
         self.chat_log = self.run_dir / "logs" / "chat_log.jsonl"
         self.timer_path = self.run_dir / "start_end_times.json"
+        self.snippet_times_path = self.run_dir / "timings" / "snippet_times.json"
         self.attestation_path = self.run_dir / "logs" / "llm_attestation.json"
         self.client_meta_path = self.run_dir / "logs" / "client_meta.json"
         self.participant_profile_path = self.run_dir / "logs" / "participant_profile.json"
@@ -159,6 +161,68 @@ class StudyStore:
     def _write_json(self, path: Path, data: dict[str, object]) -> None:
         """Write a JSON object using stable pretty-printed UTF-8 formatting."""
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def _snippet_filename(self, snippet_id: str) -> str:
+        """Resolve the locked filename for one snippet without trusting user input."""
+        locked = self.lock_data.get("snippet_files", {}) if isinstance(self.lock_data, dict) else {}
+        if isinstance(locked, dict):
+            raw = str(locked.get(snippet_id, "") or "").strip()
+            if raw:
+                return Path(raw).name
+        return ""
+
+    def _snippet_path(self, root: Path, snippet_id: str) -> Path:
+        """Resolve one snippet path within a kit folder, preserving its original extension."""
+        self._assert_known_snippet(snippet_id)
+        locked_name = self._snippet_filename(snippet_id)
+        if locked_name:
+            return root / locked_name
+
+        matches = [p for p in sorted(root.glob(f"{snippet_id}.*")) if p.is_file()]
+        if len(matches) == 1:
+            return matches[0]
+        if matches:
+            return matches[0]
+        return root / f"{snippet_id}.txt"
+
+    def _read_snippet_times(self) -> dict[str, dict[str, str]]:
+        """Load snippet timing records and return an empty mapping on failure."""
+        try:
+            raw = json.loads(self.snippet_times_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        out: dict[str, dict[str, str]] = {}
+        for sid, payload in raw.items():
+            if isinstance(payload, dict):
+                out[str(sid)] = {str(k): str(v or "") for k, v in payload.items()}
+        return out
+
+    def _write_snippet_times(self, payload: dict[str, dict[str, str]]) -> None:
+        """Persist snippet timing records using stable JSON formatting."""
+        self.snippet_times_path.parent.mkdir(parents=True, exist_ok=True)
+        self.snippet_times_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def mark_snippet_started(self, snippet_id: str) -> None:
+        """Record the first observed edit-session entry time for one snippet."""
+        self._assert_known_snippet(snippet_id)
+        payload = self._read_snippet_times()
+        entry = payload.setdefault(snippet_id, {})
+        if not str(entry.get("start", "")).strip():
+            entry["start"] = utc_now()
+            self._write_snippet_times(payload)
+
+    def mark_snippet_saved(self, snippet_id: str) -> None:
+        """Record the latest save time for one snippet and backfill start if needed."""
+        self._assert_known_snippet(snippet_id)
+        payload = self._read_snippet_times()
+        entry = payload.setdefault(snippet_id, {})
+        now = utc_now()
+        if not str(entry.get("start", "")).strip():
+            entry["start"] = now
+        entry["end"] = now
+        self._write_snippet_times(payload)
 
     def _close_open_session(self, payload: dict[str, object], close_at: str) -> dict[str, object]:
         """Close any currently open session and accumulate active duration seconds."""
@@ -287,14 +351,14 @@ class StudyStore:
 
     def load_snippet(self, snippet_id: str) -> str:
         """Load the participant-editable snippet text for one snippet ID."""
-        path = self.edits_dir / f"{snippet_id}.py"
+        path = self._snippet_path(self.edits_dir, snippet_id)
         if not path.exists():
             raise FileNotFoundError(f"Snippet file not found: {path}")
         return path.read_text(encoding="utf-8", errors="replace")
 
     def load_baseline_snippet(self, snippet_id: str) -> str:
         """Load read-only baseline text shown above the editable answer box."""
-        path = self.baseline_dir / f"{snippet_id}.py"
+        path = self._snippet_path(self.baseline_dir, snippet_id)
         if not path.exists():
             # Backward compatibility: older kits may not contain baseline/.
             return self.load_snippet(snippet_id)
@@ -316,7 +380,7 @@ class StudyStore:
         validate_summary: bool = False,
     ) -> None:
         """Persist edited code plus summary fields for one snippet save action."""
-        path = self.edits_dir / f"{snippet_id}.py"
+        path = self._snippet_path(self.edits_dir, snippet_id)
         path.write_text(code, encoding="utf-8")
 
         rows = self.read_rows()
@@ -891,8 +955,8 @@ select:focus{
         <button class="btn alt tiny" id="copyBaselineBtn" title="Copy baseline code to clipboard.">Copy Baseline</button>
       </div>
       <textarea id="baseline_code" readonly title="Baseline snippet is read-only. Use it as your reference."></textarea>
-      <div class="lbl" style="margin:10px 0 4px 0" title="Paste and refine your final edited snippet here.">Your Edited Code</div>
-      <textarea id="edited_code" title="This is the final code that will be exported for this snippet."></textarea>
+      <div class="lbl" style="margin:10px 0 4px 0" title="Paste and refine the repaired code you want to submit for this snippet.">Final Submitted Code</div>
+      <textarea id="edited_code" title="Paste the repaired result here, then edit it until it matches what you want to submit."></textarea>
 
       <hr style="border:none;border-top:1px solid #e5edff;margin:12px 0" />
       <div class="sp">
@@ -906,7 +970,7 @@ select:focus{
       <div class="chatlog" id="chatHistory" title="Chat history for the currently selected snippet."></div>
       <div class="full" style="margin-top:8px">
         <label class="lbl" title="Enter one prompt for Ollama about the current snippet.">Chat Prompt</label>
-        <textarea id="chat_prompt" placeholder="Ask Ollama for help with this snippet..." title="Press Ctrl+Enter to send quickly."></textarea>
+        <textarea id="chat_prompt" placeholder="Paste the baseline code or your current draft here and ask for a repair..." title="Press Ctrl+Enter to send quickly."></textarea>
       </div>
       <div class="row" style="margin-top:8px">
         <button class="btn" id="sendChatBtn" title="Send prompt to Ollama and auto-log both user and assistant turns.">Send To Ollama</button></div>
@@ -957,7 +1021,7 @@ select:focus{
     <div class="lbl" style="margin-top:6px">Complete this once before clicking Begin Study.</div>
     <div class="form" style="margin-top:8px">
       <div><label class="lbl" title="Your overall programming experience.">Programming Experience</label><select id="programming_experience"><option value="">Select...</option><option value="<1 year">&lt;1 year</option><option value="1-2 years">1-2 years</option><option value="3-5 years">3-5 years</option><option value="6+ years">6+ years</option></select></div>
-      <div><label class="lbl" title="Your Python experience.">Python Experience</label><select id="python_experience"><option value="">Select...</option><option value="none">None</option><option value="basic">Basic</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></div>
+      <div><label class="lbl" title="Your experience with the programming language or languages used in this study.">Language Experience</label><select id="language_experience"><option value="">Select...</option><option value="none">None</option><option value="basic">Basic</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></div>
       <div><label class="lbl" title="How often you use LLMs for coding.">LLM Coding Experience</label><select id="llm_coding_experience"><option value="">Select...</option><option value="never">Never</option><option value="rarely">Rarely</option><option value="monthly">Monthly</option><option value="weekly">Weekly</option><option value="daily">Daily</option></select></div>
       <div><label class="lbl" title="Your security training or practice background.">Security Experience</label><select id="security_experience"><option value="">Select...</option><option value="none">None</option><option value="self-taught">Self-taught</option><option value="coursework">Coursework</option><option value="professional">Professional</option></select></div>
     </div>
@@ -1127,7 +1191,7 @@ function renderSidebar(){
 
 function fillProfile(profile){
   profile = profile || {};
-  var fields = ["programming_experience","python_experience","llm_coding_experience","security_experience"];
+  var fields = ["programming_experience","language_experience","llm_coding_experience","security_experience"];
   for(var i=0;i<fields.length;i++){
     var key = fields[i];
     var el = byId(key);
@@ -1137,7 +1201,7 @@ function fillProfile(profile){
 
 function collectProfile(){
   var out = {};
-  var fields = ["programming_experience","python_experience","llm_coding_experience","security_experience"];
+  var fields = ["programming_experience","language_experience","llm_coding_experience","security_experience"];
   for(var i=0;i<fields.length;i++){
     var key = fields[i];
     var el = byId(key);
@@ -1160,7 +1224,7 @@ function saveProfile(onDone){
 }
 
 function wireProfileInputs(){
-  var profileInputs = ["programming_experience","python_experience","llm_coding_experience","security_experience"];
+  var profileInputs = ["programming_experience","language_experience","llm_coding_experience","security_experience"];
   for(var pi=0; pi<profileInputs.length; pi++){
     var pe = byId(profileInputs[pi]);
     if(pe && !pe.getAttribute("data-profile-wired")){
@@ -1199,18 +1263,20 @@ function buildInAppGuide(data){
   return [
     "Quick Steps",
     "1) Select a snippet from the left sidebar.",
-    "2) Review Baseline (read-only).",
-    "3) Paste/finalize your answer in Your Edited Code.",
-    "4) Use In-App LLM Chat to help you (auto-logged).",
-    "5) Complete the Participant Profile in the onboarding popup and click Begin Study.",
-    "6) The timer starts only after Begin Study.",
-    "7) Fill snippet summary fields, click Save, repeat for all snippets, then click Finish (Build ZIP).",
+    "2) Review Baseline (read-only) and copy the code you want the model to repair.",
+    "3) Paste that code into the In-App LLM Chat, ask for a repair, and review the response carefully.",
+    "4) Paste or refine the repaired result in Final Submitted Code.",
+    "5) Only Final Submitted Code is exported. The baseline pane stays reference-only.",
+    "6) Complete the Participant Profile in the onboarding popup and click Begin Study.",
+    "7) The timer starts only after Begin Study.",
+    "8) Fill snippet summary fields, click Save, repeat for all snippets, then click Finish (Build ZIP).",
     "",
     "LLM Usage",
     "- Assigned provider: " + provider,
     "- Assigned model: " + modelName,
     "- At least one in-app LLM turn is required for each snippet.",
     "- A turn means one logged user or assistant message in the in-app chat for the current snippet.",
+    "- Use the in-app assistant assigned with this kit. Do not send study code to outside assistants or web services unless the research team explicitly told you to do that.",
     "",
     "Prompt Strategies",
     "- Zero-Shot: ask directly for a fix with no examples. Example: Fix the SQL injection vulnerability in this function. Return only the corrected code.",
@@ -1326,9 +1392,10 @@ function buildOnboardingHtml(data){
     "<h3>How To Complete Each Snippet</h3>",
     "<ul>",
     "<li>Select a snippet from the left list.</li>",
-    "<li>Review the baseline code, then write your final answer in <strong>Your Edited Code</strong>.</li>",
+    "<li>Review the baseline code, copy the code you want repaired into the in-app LLM chat, then paste the repaired result into <strong>Final Submitted Code</strong>.</li>",
+    "<li>The baseline pane is reference-only. Only <strong>Final Submitted Code</strong> is exported for analysis.</li>",
     "<li>Complete the participant profile below, review this onboarding guide, and click <strong>Begin Study</strong>. The timer starts only then.</li>",
-    "<li>Use the in-app Ollama chat. At least one in-app turn is required for each snippet.</li>",
+    "<li>Use the in-app Ollama chat only. At least one in-app turn is required for each snippet.</li>",
     "<li>Fill in the snippet summary and save before moving on.</li>",
     "<li>After all snippets are complete, click <strong>Finish (Build ZIP)</strong>.</li>",
     "</ul>",
@@ -2156,6 +2223,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
 
             try:
+                if self.store.study_started():
+                    self.store.mark_snippet_started(snippet_id)
                 edited_code = self.store.load_snippet(snippet_id)
                 baseline_code = self.store.load_baseline_snippet(snippet_id)
                 row = self.store.get_row(snippet_id)
@@ -2218,6 +2287,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 if not isinstance(summary, dict):
                     summary = {}
                 self.store.save_snippet_and_summary(snippet_id, code, summary, validate_summary=False)
+                self.store.mark_snippet_saved(snippet_id)
                 self._json({"ok": True, "message": f"Saved {snippet_id}."})
                 return
 

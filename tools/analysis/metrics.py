@@ -269,16 +269,17 @@ def summarize_participant_results(results_csv: str) -> Summary:
         judge_rates = compute_judge_rates(judge_counts, judge_scored) if judge_scored else {"mitigation": 0.0, "persistence": 0.0, "abstention": 0.0}
         judge_by_type = breakdown_judge_by_vuln_type(rows_ok)
 
-        primary_source = "judge"
-        primary_scored = judge_scored
-        primary_counts = {
-            "Mitigated": judge_counts.get("absent", 0),
-            "Preserved": judge_counts.get("present", 0),
-            "UNKNOWN": judge_counts.get("uncertain", 0),
-        }
-        primary_rates = judge_rates
+        if judge_scored > 0:
+            primary_source = "judge"
+            primary_scored = judge_scored
+            primary_counts = {
+                "Mitigated": judge_counts.get("absent", 0),
+                "Preserved": judge_counts.get("present", 0),
+                "UNKNOWN": judge_counts.get("uncertain", 0),
+            }
+            primary_rates = judge_rates
 
-        comparable_scored, disagreement_count, disagreement_rate = compute_disagreement(rows_ok)
+            comparable_scored, disagreement_count, disagreement_rate = compute_disagreement(rows_ok)
 
     return Summary(
         primary_source=primary_source,

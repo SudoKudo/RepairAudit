@@ -60,6 +60,57 @@ def _resolve_run_dir(run_dir: Path) -> Path:
     return run_dir
 
 
+def _resolve_output_path(repo_root: Path, value: str) -> Path:
+    """Resolve a user-provided output path relative to the repository when needed."""
+    raw = Path((value or "").strip())
+    return raw.resolve() if raw.is_absolute() else (repo_root / raw).resolve()
+
+
+def _derived_stats_path(summary_csv: Path) -> Path:
+    """Derive a stats text path from one aggregate summary CSV path."""
+    stem = summary_csv.stem
+    if stem.endswith("_summary"):
+        stem = stem[: -len("_summary")] + "_stats"
+    else:
+        stem = stem + "_stats"
+    return summary_csv.with_name(stem + ".txt")
+
+
+def _derived_report_path(summary_csv: Path, repo_root: Path) -> Path:
+    """Derive a report HTML path from one aggregate summary CSV path."""
+    legacy_default = (repo_root / "data" / "aggregated" / "pilot_summary.csv").resolve()
+    if summary_csv.resolve() == legacy_default:
+        return legacy_default.parent / "report.html"
+
+    stem = summary_csv.stem
+    if stem.endswith("_summary"):
+        stem = stem[: -len("_summary")] + "_report"
+    else:
+        stem = stem + "_report"
+    return summary_csv.with_name(stem + ".html")
+
+
+def _derived_model_paths(summary_csv: Path) -> tuple[Path, Path, Path]:
+    """Derive model-output paths from one aggregate summary CSV path."""
+    stem = summary_csv.stem
+    if stem.endswith("_summary"):
+        stem = stem[: -len("_summary")]
+    return (
+        summary_csv.with_name(stem + "_model_data.csv"),
+        summary_csv.with_name(stem + "_models.json"),
+        summary_csv.with_name(stem + "_models.txt"),
+    )
+
+
+def _path_arg_for_repo(repo_root: Path, path: Path) -> str:
+    """Return a stable CLI argument path, preferring repo-relative form."""
+    resolved = path.resolve()
+    try:
+        return str(resolved.relative_to(repo_root.resolve()))
+    except ValueError:
+        return str(resolved)
+
+
 @dataclass
 class CommandStep:
     """One item in the workflow queue."""
@@ -748,6 +799,18 @@ class StudyGUI(tk.Tk):
         """Return absolute phase root under runs/."""
         return REPO_ROOT / "runs" / self.phase_var.get().strip()
 
+    def _aggregate_summary_path(self) -> Path:
+        """Return the configured aggregate summary CSV path."""
+        return _resolve_output_path(REPO_ROOT, self.stats_csv_var.get())
+
+    def _aggregate_stats_path(self) -> Path:
+        """Return the derived aggregate stats text path."""
+        return _derived_stats_path(self._aggregate_summary_path())
+
+    def _report_output_path(self) -> Path:
+        """Return the derived HTML report path for the current aggregate output."""
+        return _derived_report_path(self._aggregate_summary_path(), REPO_ROOT)
+
     def _python_cmd(self, *args: str) -> list[str]:
         """Build a python command list using the currently running interpreter."""
         return [sys.executable, *args]
@@ -781,6 +844,7 @@ class StudyGUI(tk.Tk):
         """Update the Actions-panel workflow feedback widgets."""
 
         def apply() -> None:
+            """Apply the pending workflow status update on the Tk main thread."""
             self.workflow_state_var.set(state)
             self.workflow_detail_var.set(detail)
             if completed is not None and total is not None:
@@ -797,6 +861,7 @@ class StudyGUI(tk.Tk):
         """Show a modal message box from any thread."""
 
         def apply() -> None:
+            """Dispatch the requested modal dialog on the Tk main thread."""
             if kind == "error":
                 messagebox.showerror(title, message)
             elif kind == "warning":
@@ -810,6 +875,7 @@ class StudyGUI(tk.Tk):
         """Refresh participant and pipeline views on the Tk main thread."""
 
         def apply() -> None:
+            """Run the grouped refresh callbacks once Tk is ready to paint them."""
             self.refresh_participants()
             self.refresh_pipeline_progress()
             self.refresh_participant_badges()
@@ -1025,24 +1091,23 @@ class StudyGUI(tk.Tk):
             except Exception:
                 out["Interaction Merged"] = False
 
-        aggregated_dir = REPO_ROOT / "data" / "aggregated"
-        pilot_summary_path = aggregated_dir / "pilot_summary.csv"
-        pilot_stats_path = aggregated_dir / "pilot_stats.txt"
-        report_path = aggregated_dir / "report.html"
+        summary_path = self._aggregate_summary_path()
+        stats_path = self._aggregate_stats_path()
+        report_path = self._report_output_path()
 
-        aggregated_run_ids = self._aggregated_run_ids(pilot_summary_path)
+        aggregated_run_ids = self._aggregated_run_ids(summary_path)
         out["Pilot Aggregated"] = run_id in aggregated_run_ids
         out["Stats Generated"] = (
             out["Pilot Aggregated"]
-            and pilot_stats_path.exists()
-            and pilot_summary_path.exists()
-            and pilot_stats_path.stat().st_mtime >= pilot_summary_path.stat().st_mtime
+            and stats_path.exists()
+            and summary_path.exists()
+            and stats_path.stat().st_mtime >= summary_path.stat().st_mtime
         )
         out["Report Built"] = (
             out["Pilot Aggregated"]
             and report_path.exists()
-            and pilot_summary_path.exists()
-            and report_path.stat().st_mtime >= pilot_summary_path.stat().st_mtime
+            and summary_path.exists()
+            and report_path.stat().st_mtime >= summary_path.stat().st_mtime
             and self._report_contains_run(report_path, run_id)
         )
         return out
@@ -1491,6 +1556,13 @@ class StudyGUI(tk.Tk):
             messagebox.showerror("Invalid judge settings", str(exc))
             return
 
+        phase = self.phase_var.get().strip()
+        runs_root = self._phase_root()
+        summary_path = self._aggregate_summary_path()
+        stats_path = self._aggregate_stats_path()
+        model_csv_path, model_json_path, model_txt_path = _derived_model_paths(summary_path)
+        report_path = self._report_output_path()
+
         steps: list[CommandStep] = []
         for pid in participants:
             analyze_cmd = self._python_cmd(
@@ -1500,7 +1572,7 @@ class StudyGUI(tk.Tk):
                 "--participant_id",
                 pid,
                 "--phase",
-                self.phase_var.get().strip(),
+                phase,
                 "--metadata_csv",
                 self.metadata_var.get().strip(),
             )
@@ -1522,17 +1594,66 @@ class StudyGUI(tk.Tk):
 
                 steps.append(CommandStep(label=f"Skip Merge {pid}", action=_skip_merge(pid, log_csv)))
 
-        steps.append(CommandStep(label="Aggregate Pilot", command=self._python_cmd("-m", "scripts.study_cli", "aggregate-pilot")))
+        steps.append(
+            CommandStep(
+                label="Aggregate Summary",
+                command=self._python_cmd(
+                    "-m",
+                    "scripts.study_cli",
+                    "aggregate-pilot",
+                    "--runs_root",
+                    _path_arg_for_repo(REPO_ROOT, runs_root),
+                    "--out_csv",
+                    _path_arg_for_repo(REPO_ROOT, summary_path),
+                ),
+            )
+        )
         steps.append(
             CommandStep(
                 label="Compute Stats",
-                command=self._python_cmd("-m", "scripts.study_cli", "compute-stats", "--in_csv", self.stats_csv_var.get().strip()),
+                command=self._python_cmd(
+                    "-m",
+                    "scripts.study_cli",
+                    "compute-stats",
+                    "--in_csv",
+                    _path_arg_for_repo(REPO_ROOT, summary_path),
+                    "--out_txt",
+                    _path_arg_for_repo(REPO_ROOT, stats_path),
+                ),
+            )
+        )
+        steps.append(
+            CommandStep(
+                label="Compute Models",
+                command=self._python_cmd(
+                    "-m",
+                    "scripts.study_cli",
+                    "compute-models",
+                    "--runs_root",
+                    _path_arg_for_repo(REPO_ROOT, runs_root),
+                    "--out_csv",
+                    _path_arg_for_repo(REPO_ROOT, model_csv_path),
+                    "--out_json",
+                    _path_arg_for_repo(REPO_ROOT, model_json_path),
+                    "--out_txt",
+                    _path_arg_for_repo(REPO_ROOT, model_txt_path),
+                ),
             )
         )
         steps.append(
             CommandStep(
                 label="Build Report",
-                command=self._python_cmd("-m", "scripts.study_cli", "build-report", "--phase", self.phase_var.get().strip()),
+                command=self._python_cmd(
+                    "-m",
+                    "scripts.study_cli",
+                    "build-report",
+                    "--phase",
+                    phase,
+                    "--runs_root",
+                    _path_arg_for_repo(REPO_ROOT, runs_root),
+                    "--out_html",
+                    _path_arg_for_repo(REPO_ROOT, report_path),
+                ),
             )
         )
 
@@ -1576,11 +1697,11 @@ class StudyGUI(tk.Tk):
 
     def open_html_report(self) -> None:
         """Open the generated HTML report in the default browser."""
-        report_path = (REPO_ROOT / "data" / "aggregated" / "report.html").resolve()
+        report_path = self._report_output_path()
         if not report_path.exists():
             messagebox.showwarning(
                 "Report missing",
-                "Report not found yet. Run Start Analysis first to generate data/aggregated/report.html.",
+                f"Report not found yet. Run Start Analysis first to generate {report_path}.",
             )
             return
 

@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -56,11 +58,59 @@ def _load_snippets(metadata_csv: Path) -> list[dict[str, str]]:
             sid = (row.get("snippet_id") or "").strip()
             base = (row.get("baseline_relpath") or "").strip()
             if sid and base:
-                rows.append({"snippet_id": sid, "baseline_relpath": base})
+                rows.append({"snippet_id": sid, "baseline_relpath": base, "language": (row.get("language") or "").strip()})
 
     if not rows:
         raise ValueError(f"No usable rows found in metadata CSV: {metadata_csv}")
     return rows
+
+
+def _snippet_output_name(row: dict[str, str]) -> str:
+    """Return the participant-visible filename for one snippet artifact."""
+    base = Path(row["baseline_relpath"])
+    if base.name:
+        return base.name
+    return f'{row["snippet_id"]}.txt'
+
+
+def _sha256_file(path: Path) -> str:
+    """Return SHA-256 hash of a file for reproducibility manifests."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _sha256_text(text: str) -> str:
+    """Return SHA-256 hash of a UTF-8 string payload."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _git_head_sha(repo_root: Path) -> str:
+    """Return the current git commit SHA when available."""
+    try:
+        output = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        return output.strip()
+    except Exception:
+        return ""
+
+
+def _write_kit_manifest(*, kit_dir: Path, metadata_csv: Path, lock_payload: dict[str, Any], snippet_files: dict[str, str]) -> None:
+    """Write a local reproducibility manifest without participant results or logs."""
+    repo_root = Path(__file__).resolve().parents[1]
+    config_path = repo_root / "config.yaml"
+    manifest = {
+        "generated_utc": _participant_timestamp(),
+        "repo_commit": _git_head_sha(repo_root),
+        "metadata_csv": str(metadata_csv),
+        "metadata_sha256": _sha256_file(metadata_csv) if metadata_csv.exists() else "",
+        "config_yaml_sha256": _sha256_file(config_path) if config_path.exists() else "",
+        "study_config_lock_sha256": _sha256_text(json.dumps(lock_payload, sort_keys=True)),
+        "snippet_files": snippet_files,
+    }
+    (kit_dir / "kit_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
 def _write_participant_log_template(log_csv: Path, snippet_ids: list[str], model_name: str) -> None:
@@ -110,7 +160,7 @@ def _write_participant_profile_template(profile_path: Path) -> None:
         json.dumps(
             {
                 "programming_experience": "",
-                "python_experience": "",
+                "language_experience": "",
                 "llm_coding_experience": "",
                 "security_experience": "",
             },
@@ -133,12 +183,13 @@ def _write_participant_readme(
 
 Use the RepairAudit participant app for all study instructions and task steps. This README is only for launch and troubleshooting.
 
-## 1) Ollama Setup (Required)
-1. Install Ollama from [https://ollama.com/download](https://ollama.com/download).
-2. Open a terminal and run: `ollama pull {model_name}`
-3. Start Ollama before opening the study app:
+## 1) Local Setup
+1. Make sure Python is installed on the machine that will run this kit. It is only needed to launch the local app and packaging tools.
+2. Install Ollama from [https://ollama.com/download](https://ollama.com/download).
+3. Open a terminal and run: `ollama pull {model_name}`
+4. Start Ollama before opening the study app:
    - `ollama serve`
-4. Keep Ollama running in the background while you complete the study.
+5. Keep Ollama running in the background while you complete the study.
 
 ## 2) Start The Study App
 1. On Windows: double-click `Launch_Study_Web_App.bat`.
@@ -157,7 +208,9 @@ Use the RepairAudit participant app for all study instructions and task steps. T
 - Complete the participant profile in the app.
 - Review the onboarding/help panel.
 - Click **Begin Study** to start the timer and unlock the task workflow.
-- Follow the app instructions for all 8 snippets.
+- For each assigned snippet, review the read-only baseline code, copy the relevant code into the in-app LLM chat, ask for a repair, then paste or refine the repaired result in the **Final Submitted Code** box.
+- The baseline pane is reference-only. Only the code in **Final Submitted Code** is exported for researcher analysis.
+- Use the in-app LLM chat assigned with this kit. Do not paste study materials into outside assistants or web services unless the research team explicitly instructed you to do so.
 - Use **Finish (Build ZIP)** in the app when done.
 
 ## 5) What The App Auto-Logs
@@ -178,13 +231,14 @@ Use the RepairAudit participant app for all study instructions and task steps. T
 {participant_id}/
 |-- README.md
 |-- study_config.lock.json
+|-- kit_manifest.json
 |-- participant_web_app.py
 |-- Launch_Study_Web_App.bat
 |-- Launch_Study_Web_App.sh
 |-- package_submission.py
 `-- {run_dir_name}/
-    |-- baseline/*.py
-    |-- edits/*.py
+    |-- baseline/*
+    |-- edits/*
     |-- logs/participant_profile.json
     |-- logs/snippet_log.csv
     |-- logs/chat_log.jsonl
@@ -198,6 +252,8 @@ Do not include personal identifiers or sensitive account data in prompts, code c
 ## 9) Help
 If the app cannot connect to Ollama, start/restart `ollama serve` and try again.
 If the app does not open automatically, copy the localhost URL shown in the launcher window into your browser.
+If the launcher says `py` or `python` is missing, install Python and run the launcher again.
+If you accidentally clear the submission box for a snippet, reopen the snippet from the left sidebar and paste your repaired code back in before finishing the study.
 """
     path.write_text(content, encoding="utf-8")
 
@@ -371,7 +427,7 @@ def _validate_participant_profile() -> list[str]:
 
     allowed = {{
         "programming_experience": {{"<1 year", "1-2 years", "3-5 years", "6+ years"}},
-        "python_experience": {{"none", "basic", "intermediate", "advanced"}},
+        "language_experience": {{"none", "basic", "intermediate", "advanced"}},
         "llm_coding_experience": {{"never", "rarely", "monthly", "weekly", "daily"}},
         "security_experience": {{"none", "self-taught", "coursework", "professional"}},
     }}
@@ -476,6 +532,7 @@ def build_participant_kit(args: argparse.Namespace) -> None:
     """Build a locked participant kit with baseline snippets and submission helpers."""
     snippets = _load_snippets(Path(args.metadata_csv))
     snippet_ids = [row["snippet_id"] for row in snippets]
+    snippet_files = {row["snippet_id"]: _snippet_output_name(row) for row in snippets}
 
     out_root = Path(args.out_root)
     kit_dir = out_root / args.participant_id
@@ -500,9 +557,10 @@ def build_participant_kit(args: argparse.Namespace) -> None:
         src = Path(row["baseline_relpath"])
         if not src.exists():
             raise FileNotFoundError(f"Missing baseline snippet: {src}")
+        output_name = snippet_files[sid]
         # Keep the editable answer file intentionally blank at start.
-        (run_dir / "edits" / f"{sid}.py").write_text("", encoding="utf-8")
-        shutil.copy2(src, run_dir / "baseline" / f"{sid}.py")
+        (run_dir / "edits" / output_name).write_text("", encoding="utf-8")
+        shutil.copy2(src, run_dir / "baseline" / output_name)
 
     (run_dir / "condition.txt").write_text(args.condition.strip() + "\n", encoding="utf-8")
     (run_dir / "start_end_times.json").write_text(
@@ -539,6 +597,7 @@ def build_participant_kit(args: argparse.Namespace) -> None:
         "phase": args.phase,
         "generated_utc": _participant_timestamp(),
         "snippet_ids": snippet_ids,
+        "snippet_files": snippet_files,
         "llm": {
             "provider": args.llm_provider,
             "model": args.llm_model,
@@ -555,6 +614,12 @@ def build_participant_kit(args: argparse.Namespace) -> None:
         },
     }
     (kit_dir / "study_config.lock.json").write_text(json.dumps(locked_config, indent=2), encoding="utf-8")
+    _write_kit_manifest(
+        kit_dir=kit_dir,
+        metadata_csv=Path(args.metadata_csv),
+        lock_payload=locked_config,
+        snippet_files=snippet_files,
+    )
 
     _write_participant_readme(
         path=kit_dir / "README.md",

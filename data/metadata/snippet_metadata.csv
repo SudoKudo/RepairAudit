@@ -1,9 +1,7 @@
-snippet_id,vuln_type,cwe,baseline_relpath,gold_relpath,task_short,notes
-SQLi_01,SQLi,CWE-89,snippets/baseline/SQLi/SQLi_01.py,snippets/gold/SQLi/SQLi_01.py,Login lookup uses unsafe SQL concatenation,Expect parameterized execute
-SQLi_02,SQLi,CWE-89,snippets/baseline/SQLi/SQLi_02.py,snippets/gold/SQLi/SQLi_02.py,Search endpoint builds query via f-string,Expect parameterized execute
-SQLi_03,SQLi,CWE-89,snippets/baseline/SQLi/SQLi_03.py,snippets/gold/SQLi/SQLi_03.py,Order history query uses format(),Expect parameterized execute
-SQLi_04,SQLi,CWE-89,snippets/baseline/SQLi/SQLi_04.py,snippets/gold/SQLi/SQLi_04.py,Admin filter builds SQL with user input,Expect allowlist or parameters
-CMDi_01,CMDi,CWE-78,snippets/baseline/CMDi/CMDi_01.py,snippets/gold/CMDi/CMDi_01.py,Pings a host using os.system,Expect subprocess list args
-CMDi_02,CMDi,CWE-78,snippets/baseline/CMDi/CMDi_02.py,snippets/gold/CMDi/CMDi_02.py,Archives a directory using shell=True,Expect subprocess list args
-CMDi_03,CMDi,CWE-78,snippets/baseline/CMDi/CMDi_03.py,snippets/gold/CMDi/CMDi_03.py,Greps logs via shell pipeline,Expect avoid shell or sanitize
-CMDi_04,CMDi,CWE-78,snippets/baseline/CMDi/CMDi_04.py,snippets/gold/CMDi/CMDi_04.py,Runs user-selected tool with args,Expect allowlist and list args
+snippet_id,vuln_type,cwe,language,baseline_relpath,gold_relpath,task_short,notes
+SQLi_01,SQLi,CWE-89,python,snippets/baseline/SQLi/SQLi_01.py,snippets/gold/SQLi/SQLi_01.py,Login lookup uses unsafe SQL concatenation,Expect parameterized execute
+CMDi_01,CMDi,CWE-78,python,snippets/baseline/CMDi/CMDi_01.py,snippets/gold/CMDi/CMDi_01.py,Pings a host using os.system,Expect subprocess list args
+SQLi_Java_01,SQLi,CWE-89,java,snippets/baseline/SQLi/SQLi_Java_01.java,snippets/gold/SQLi/SQLi_Java_01.java,JDBC query concatenates username into SQL,Expect PreparedStatement with bound parameter
+CMDi_Java_01,CMDi,CWE-78,java,snippets/baseline/CMDi/CMDi_Java_01.java,snippets/gold/CMDi/CMDi_Java_01.java,Java runtime exec builds command string from user input,Expect ProcessBuilder with split args
+CMDi_C_01,CMDi,CWE-78,c,snippets/baseline/CMDi/CMDi_C_01.c,snippets/gold/CMDi/CMDi_C_01.c,C helper builds shell command and calls system,Expect exec or posix_spawn style launch
+SQLi_CPP_01,SQLi,CWE-89,cpp,snippets/baseline/SQLi/SQLi_CPP_01.cpp,snippets/gold/SQLi/SQLi_CPP_01.cpp,SQLite query string concatenates username in C++,Expect prepared statement with bound parameter

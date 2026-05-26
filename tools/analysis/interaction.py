@@ -59,6 +59,7 @@ def _to_int(x: str, default: int = 0) -> int:
 
 
 def _normalize_strategy(value: str) -> str:
+    """Map free-text strategy labels onto the study's allowlisted values."""
     raw = (value or "").strip().lower()
     if not raw:
         return "other"

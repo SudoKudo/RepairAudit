@@ -23,6 +23,7 @@ from tools.analysis.interaction import (
     merge_interaction_into_results,
 )
 from tools.analysis.metrics import write_summary_files
+from tools.analysis.modeling import write_model_artifacts
 from tools.analysis.stats import write_pilot_stats_text
 from tools.instrumentation.capture_env import capture_env
 from tools.instrumentation.diff_runner import make_diff
@@ -46,7 +47,7 @@ _STRATEGY_PRIMARY = [
 ]
 _PARTICIPANT_PROFILE_FIELDS = [
     "programming_experience",
-    "python_experience",
+    "language_experience",
     "llm_coding_experience",
     "security_experience",
 ]
@@ -63,7 +64,14 @@ def _load_metadata_rows(metadata_csv: Path) -> list[dict[str, str]]:
             sid = (row.get("snippet_id") or "").strip()
             base = (row.get("baseline_relpath") or "").strip()
             if sid and base:
-                rows.append({"snippet_id": sid, "baseline_relpath": base})
+                rows.append(
+                    {
+                        "snippet_id": sid,
+                        "baseline_relpath": base,
+                        "gold_relpath": (row.get("gold_relpath") or "").strip(),
+                        "language": (row.get("language") or "").strip(),
+                    }
+                )
     return rows
 
 
@@ -87,7 +95,14 @@ def _load_snippets(metadata_csv: Path) -> list[dict[str, str]]:
             sid = (row.get("snippet_id") or "").strip()
             base = (row.get("baseline_relpath") or "").strip()
             if sid and base:
-                rows.append({"snippet_id": sid, "baseline_relpath": base})
+                rows.append(
+                    {
+                        "snippet_id": sid,
+                        "baseline_relpath": base,
+                        "gold_relpath": (row.get("gold_relpath") or "").strip(),
+                        "language": (row.get("language") or "").strip(),
+                    }
+                )
 
     if not rows:
         raise ValueError(f"No usable rows found in metadata CSV: {metadata_csv}")
@@ -112,17 +127,29 @@ def _resolve_run_dir(run_dir: Path) -> Path:
     return run_dir
 
 
+def _edited_filename(item: dict[str, str]) -> str:
+    """Return the run-local edited filename for one metadata row."""
+    baseline = Path(item.get("baseline_relpath", "")).name
+    if baseline:
+        return baseline
+    return f'{item.get("snippet_id", "").strip() or "snippet"}.txt'
+
+
+def _edited_path_for_item(edits_dir: Path, item: dict[str, str]) -> Path:
+    """Resolve the edited file path for one metadata row inside edits/."""
+    return edits_dir / _edited_filename(item)
+
+
 def _copy_baselines_to_edits(run_dir: Path, snippets: list[dict[str, str]]) -> None:
     """Copy baseline snippet files into the participant edits folder."""
     edits_dir = run_dir / "edits"
     edits_dir.mkdir(parents=True, exist_ok=True)
 
     for item in snippets:
-        sid = item["snippet_id"]
         src = Path(item["baseline_relpath"])
         if not src.exists():
             raise FileNotFoundError(f"Missing baseline snippet: {src}")
-        dst = edits_dir / f"{sid}.py"
+        dst = _edited_path_for_item(edits_dir, item)
         if not dst.exists():
             shutil.copyfile(src, dst)
 
@@ -208,7 +235,7 @@ def cmd_analyze_run(args: argparse.Namespace) -> None:
     for row in rows:
         sid = row["snippet_id"]
         baseline = Path(row["baseline_relpath"])
-        edited = edits_dir / f"{sid}.py"
+        edited = _edited_path_for_item(edits_dir, row)
         outdiff = run_dir / "diffs" / f"{sid}.diff"
         if baseline.exists() and edited.exists():
             diff_stats[sid] = make_diff(str(baseline), str(edited), str(outdiff))
@@ -310,6 +337,7 @@ def cmd_merge_interaction(args: argparse.Namespace) -> None:
 
 
 def _load_participant_profile(run_dir: Path) -> dict[str, str]:
+    """Load normalized participant-profile fields from one analyzed run."""
     profile_path = run_dir / "logs" / "participant_profile.json"
     if not profile_path.exists():
         return {field: "" for field in _PARTICIPANT_PROFILE_FIELDS}
@@ -432,9 +460,8 @@ def _compute_time_to_first_secure_fix_seconds(run_dir: Path, primary_source: str
     except Exception:
         return -1.0
 
-    try:
-        run_start = datetime.fromisoformat(str(run_times.get("start", "")))
-    except Exception:
+    run_start = _parse_iso_ts(run_times.get("start"))
+    if run_start is None:
         return -1.0
 
     rows = _read_results_rows(run_dir)
@@ -454,10 +481,9 @@ def _compute_time_to_first_secure_fix_seconds(run_dir: Path, primary_source: str
         end_text = str(entry.get("end", "") or "").strip()
         if not end_text:
             continue
-        try:
-            end_times.append(datetime.fromisoformat(end_text))
-        except Exception:
-            continue
+        end_dt = _parse_iso_ts(end_text)
+        if end_dt is not None:
+            end_times.append(end_dt)
 
     if not end_times:
         return -1.0
@@ -574,7 +600,7 @@ def cmd_aggregate_pilot(args: argparse.Namespace) -> None:
                 "interaction_strategy_distribution": _stable_json(strat_dist),
                 "participant_profile_complete": all(str(profile.get(field, "")).strip() for field in _PARTICIPANT_PROFILE_FIELDS),
                 "participant_programming_experience": profile.get("programming_experience", ""),
-                "participant_python_experience": profile.get("python_experience", ""),
+                "participant_language_experience": profile.get("language_experience", ""),
                 "participant_llm_coding_experience": profile.get("llm_coding_experience", ""),
                 "participant_security_experience": profile.get("security_experience", ""),
             }
@@ -608,7 +634,7 @@ def cmd_aggregate_pilot(args: argparse.Namespace) -> None:
         "interaction_strategy_distribution",
         "participant_profile_complete",
         "participant_programming_experience",
-        "participant_python_experience",
+        "participant_language_experience",
         "participant_llm_coding_experience",
         "participant_security_experience",
     ]
@@ -631,6 +657,20 @@ def cmd_compute_stats(args: argparse.Namespace) -> None:
     """Compute descriptive/inferential statistics from aggregated CSV output."""
     write_pilot_stats_text(in_csv=args.in_csv, out_txt=args.out_txt)
     print(f"Wrote: {args.out_txt}")
+
+
+def cmd_compute_models(args: argparse.Namespace) -> None:
+    """Build snippet-level model data and fit the local mitigation model."""
+    payload = write_model_artifacts(
+        runs_root=args.runs_root,
+        out_csv=args.out_csv,
+        out_json=args.out_json,
+        out_txt=args.out_txt,
+    )
+    print(f"Wrote: {args.out_csv}")
+    print(f"Wrote: {args.out_json}")
+    print(f"Wrote: {args.out_txt}")
+    print(f"Modeled rows: {payload.get('model', {}).get('n_modeled_rows', 0)}")
 
 
 def cmd_build_report(args: argparse.Namespace) -> None:
@@ -730,13 +770,13 @@ def _synthetic_now_iso() -> str:
 
 
 def _list_snippet_triples() -> list[tuple[str, Path, Path]]:
-    """Return (snippet_id, baseline_path, gold_path) for all SQLi/CMDi snippets."""
+    """Return (snippet_id, baseline_path, gold_path) for all metadata-registered snippets."""
     out: list[tuple[str, Path, Path]] = []
-    for vuln_type in ["SQLi", "CMDi"]:
-        bdir = REPO_ROOT / "snippets" / "baseline" / vuln_type
-        gdir = REPO_ROOT / "snippets" / "gold" / vuln_type
-        for bpath in sorted(bdir.glob("*.py")):
-            out.append((bpath.stem, bpath, gdir / bpath.name))
+    for row in _load_metadata_rows(DEFAULT_METADATA_PATH):
+        baseline = REPO_ROOT / row["baseline_relpath"]
+        gold = REPO_ROOT / row["gold_relpath"] if row.get("gold_relpath") else Path()
+        if baseline.exists() and gold.exists():
+            out.append((row["snippet_id"], baseline, gold))
     return out
 
 
@@ -789,7 +829,7 @@ def _make_synthetic_run(participant_id: str, condition: str, mode: str, *, seed:
     (logs_dir / "participant_profile.json").write_text(
         json.dumps({
             "programming_experience": random.choice(["<1 year", "1-2 years", "3-5 years", "6+ years"]),
-            "python_experience": random.choice(["none", "basic", "intermediate", "advanced"]),
+            "language_experience": random.choice(["none", "basic", "intermediate", "advanced"]),
             "llm_coding_experience": random.choice(["never", "rarely", "monthly", "weekly", "daily"]),
             "security_experience": random.choice(["none", "self-taught", "coursework", "professional"]),
         }, indent=2),
@@ -922,6 +962,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_stats.add_argument("--in_csv", default="data/aggregated/pilot_summary.csv")
     p_stats.add_argument("--out_txt", default="data/aggregated/pilot_stats.txt")
     p_stats.set_defaults(func=cmd_compute_stats)
+
+    p_models = sub.add_parser("compute-models", help="Build snippet-level model outputs from analyzed runs.")
+    p_models.add_argument("--runs_root", default="runs/pilot")
+    p_models.add_argument("--out_csv", default="data/aggregated/pilot_model_data.csv")
+    p_models.add_argument("--out_json", default="data/aggregated/pilot_models.json")
+    p_models.add_argument("--out_txt", default="data/aggregated/pilot_models.txt")
+    p_models.set_defaults(func=cmd_compute_models)
 
     p_report = sub.add_parser("build-report", help="Build offline HTML report.")
     p_report.add_argument("--phase", default="pilot")

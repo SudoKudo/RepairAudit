@@ -46,9 +46,17 @@ SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 
 TEXT_SUFFIXES = {
     ".py",
+    ".java",
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cxx",
+    ".h",
+    ".hpp",
     ".md",
     ".txt",
     ".json",
+    ".jsonl",
     ".csv",
     ".yaml",
     ".yml",

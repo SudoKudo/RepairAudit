@@ -14,6 +14,7 @@ __pycache__/
 .DS_Store
 .vscode/
 *.swp
+.idea/
 
 # =========================
 # Experimental Runs (NEVER COMMIT)

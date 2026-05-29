@@ -12,6 +12,7 @@ preserves every input column and appends the classifier results.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 from json import JSONDecodeError, JSONDecoder
@@ -329,10 +330,13 @@ def _default_output_csv(input_csv: Path) -> Path:
     return resolved_input.with_name(f"{resolved_input.stem}_classified.csv")
 
 
-def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Path) -> None:
+def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Path, chunk_size: int) -> None:
     """Run expertise classification for one input CSV."""
-    df = pd.read_csv(input_csv)
-    logger.info("Loaded %s rows from %s - model: %s", len(df), input_csv, model)
+    with input_csv.open("r", encoding="utf-8", newline="") as fh:
+        reader = csv.reader(fh)
+        next(reader)  # skip header
+        total_rows = sum(1 for _ in reader)
+    logger.info("Processing %s rows from %s - model: %s", total_rows, input_csv, model)
 
     completed: set[str] = set()
     if resume and output_csv.exists():
@@ -344,69 +348,72 @@ def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Pa
 
     classified_rows = 0
     discarded_rows = 0
+    i = 0
 
-    for i, raw_row in enumerate(df.to_dict(orient="records"), start=1):
-        row = _string_keyed_row(raw_row)
-        sample_id = _clean_text(row.get("sample_id", ""))
-        if resume and sample_id in completed:
-            continue
-
-        language = _clean_text(row.get("language", ""))
-        cwe_primary = _clean_text(row.get("cwe_primary", ""))
-        vulnerability_type = _clean_text(row.get("vulnerability_type", ""))
-        source_project = _clean_text(row.get("source_project", ""))
-        file_path = _clean_text(row.get("file_path", ""))
-        code_sample = _clean_text(row.get("code_sample", ""))
-
-        logger.info("[%s/%s] %s (%s, %s)", i, len(df), sample_id, language, cwe_primary)
-
-        user_content = _build_user_message(
-            project=source_project,
-            file_path=file_path,
-            language=language,
-            vulnerability_type=vulnerability_type,
-            cwe_primary=cwe_primary,
-            code_sample=code_sample,
-        )
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ]
-
-        classification: dict[str, Any] | None = None
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            try:
-                response_text = _call_ollama(model, messages, stream=stream)
-            except Exception as exc:
-                logger.warning("[%s] attempt %s: Ollama request failed: %s", sample_id, attempt, exc)
+    for chunk in pd.read_csv(input_csv, chunksize=chunk_size):
+        for raw_row in chunk.to_dict(orient="records"):
+            i += 1
+            row = _string_keyed_row(raw_row)
+            sample_id = _clean_text(row.get("sample_id", ""))
+            if resume and sample_id in completed:
                 continue
 
-            extracted = _extract_first_json_object(response_text)
-            if extracted is None:
-                logger.warning("[%s] attempt %s: could not extract a JSON object", sample_id, attempt)
-                continue
+            language = _clean_text(row.get("language", ""))
+            cwe_primary = _clean_text(row.get("cwe_primary", ""))
+            vulnerability_type = _clean_text(row.get("vulnerability_type", ""))
+            source_project = _clean_text(row.get("source_project", ""))
+            file_path = _clean_text(row.get("file_path", ""))
+            code_sample = _clean_text(row.get("code_sample", ""))
 
-            classification, reason = _validate_classification(extracted)
-            if classification is not None:
-                break
+            logger.info("[%s/%s] %s (%s, %s)", i, total_rows, sample_id, language, cwe_primary)
 
-            logger.warning("[%s] attempt %s: invalid classification payload: %s", sample_id, attempt, reason)
+            user_content = _build_user_message(
+                project=source_project,
+                file_path=file_path,
+                language=language,
+                vulnerability_type=vulnerability_type,
+                cwe_primary=cwe_primary,
+                code_sample=code_sample,
+            )
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ]
 
-        if classification is None:
-            logger.warning("[%s] discarded after %s attempts", sample_id, MAX_ATTEMPTS)
-            classification = {"primary_expertise_area": "", "secondary_expertise_areas": []}
-            discarded_rows += 1
-        else:
-            classified_rows += 1
+            classification: dict[str, Any] | None = None
+            for attempt in range(1, MAX_ATTEMPTS + 1):
+                try:
+                    response_text = _call_ollama(model, messages, stream=stream)
+                except Exception as exc:
+                    logger.warning("[%s] attempt %s: Ollama request failed: %s", sample_id, attempt, exc)
+                    continue
 
-        result = pd.DataFrame([_build_output_row(row, classification, model)])
-        result.to_csv(output_csv, mode="a", header=not output_csv.exists(), index=False)
+                extracted = _extract_first_json_object(response_text)
+                if extracted is None:
+                    logger.warning("[%s] attempt %s: could not extract a JSON object", sample_id, attempt)
+                    continue
+
+                classification, reason = _validate_classification(extracted)
+                if classification is not None:
+                    break
+
+                logger.warning("[%s] attempt %s: invalid classification payload: %s", sample_id, attempt, reason)
+
+            if classification is None:
+                logger.warning("[%s] discarded after %s attempts", sample_id, MAX_ATTEMPTS)
+                classification = {"primary_expertise_area": "", "secondary_expertise_areas": []}
+                discarded_rows += 1
+            else:
+                classified_rows += 1
+
+            result = pd.DataFrame([_build_output_row(row, classification, model)])
+            result.to_csv(output_csv, mode="a", header=not output_csv.exists(), index=False)
 
     logger.info(
         "Done. classified=%s discarded=%s total=%s",
         classified_rows,
         discarded_rows,
-        len(df),
+        total_rows,
     )
 
 
@@ -432,6 +439,12 @@ if __name__ == "__main__":
         "--no-stream",
         action="store_true",
         help="Disable token streaming (silent until response is complete)",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=500,
+        help="Number of rows to read from the input CSV at a time (default: 500)",
     )
 
     mode = parser.add_mutually_exclusive_group()
@@ -460,4 +473,5 @@ if __name__ == "__main__":
         stream=not args.no_stream,
         input_csv=input_csv,
         output_csv=output_csv,
+        chunk_size=args.chunk_size,
     )

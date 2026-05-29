@@ -1006,7 +1006,7 @@ C#,2,S051534,medium,high,Input Validation/Injection,CWE-79,CVE-2008-3422,https:/
 			string submit = Page.GetSubmitStatements ();
 			if (submit != null && submit != """")
 				w.WriteAttribute (""onsubmit"", submit);
-			
+
 			/* enctype and target should not be written if
 			 * they are empty
 			 */
@@ -1141,7 +1141,7 @@ C#,5,S047545,high,high,Input Validation/Injection,CWE-79,CVE-2008-3422,https://g
 			   2.0 mode or if the xhtml conformance mode is set to
 			   Legacy for 2.0 according to http://msdn2.microsoft.com/en-us/library/system.web.ui.htmlcontrols.htmlform.name.aspx
 			*/
-			
+
 			string action;
 			string file_path = Page.Request.FilePath;
 			string current_path = Page.Request.CurrentExecutionFilePath;
@@ -1171,7 +1171,7 @@ C#,5,S047545,high,high,Input Validation/Injection,CWE-79,CVE-2008-3422,https://g
 #if NET_2_0
 			XhtmlConformanceSection xhtml = WebConfigurationManager.GetSection (""system.web/xhtmlConformance"") as
 				XhtmlConformanceSection;
-			
+
 			if (xhtml != null && xhtml.Mode == XhtmlConformanceMode.Legacy)
 #endif
 				w.WriteAttribute (""name"", Name);
@@ -1192,7 +1192,7 @@ C#,5,S047545,high,high,Input Validation/Injection,CWE-79,CVE-2008-3422,https://g
 				Attributes.Remove (""onsubmit"");
 				w.WriteAttribute (""onsubmit"", submit);
 			}
-			
+
 			/* enctype and target should not be written if
 			 * they are empty
 			 */
@@ -1471,7 +1471,7 @@ C#,7,S007507,low,low,Access Control/Auth,CWE-918,CVE-2017-0907,https://github.co
         }",database_security_engineer,identity_and_access_engineer|web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
 C#,8,S029645,low,high,Input Validation/Injection,CWE-611,CVE-2023-24323,https://github.com/i7MEDIA/mojoportal,mojoPortal.Features.Data.MySql/Blog/DBBlog.cs,"        public static IDataReader GetSingleBlog(int itemId, DateTime currentTime)
         {
-            
+
 
             StringBuilder sqlCommand = new StringBuilder();
             sqlCommand.Append(""SELECT  b.*, "");
@@ -1526,7 +1526,7 @@ C#,9,S001994,medium,high,Crypto/Trust,CWE-295,CVE-2015-2318,https://github.com/m
 
 			try
 			{
-				
+
 				int bytesRead = internalResult.Record.EndRead(asyncResult);
 
 				//We're at the end of the stream. Time to bail.
@@ -1566,10 +1566,10 @@ C#,9,S001994,medium,high,Crypto/Trust,CWE-295,CVE-2015-2318,https://github.com/m
 				{
 					case ContentType.Alert:
 						this.ProcessAlert((AlertLevel)buffer [0], (AlertDescription)buffer [1]);
-						if (record.CanSeek) 
+						if (record.CanSeek)
 						{
 							// don't reprocess that memory block
-							record.SetLength (0); 
+							record.SetLength (0);
 						}
 						buffer = null;
 						break;
@@ -3282,7 +3282,7 @@ Java,2,S033551,high,high,Resource/Availability,CWE-399,CVE-2011-0534,https://git
         if ( parsingRequestLinePhase == 0 ) {
             byte chr = 0;
             do {
-                
+
                 // Read new bytes if needed
                 if (pos >= lastValid) {
                     if (useAvailableDataOnly) {
@@ -3296,10 +3296,10 @@ Java,2,S033551,high,high,Resource/Availability,CWE-399,CVE-2011-0534,https://git
             pos--;
             parsingRequestLineStart = pos;
             parsingRequestLinePhase = 1;
-        } 
+        }
         if ( parsingRequestLinePhase == 1 ) {
             // Mark the current buffer position
-            
+
             if (pos >= lastValid) {
                 if (useAvailableDataOnly) {
                     return false;
@@ -3359,7 +3359,7 @@ Java,2,S033551,high,high,Resource/Availability,CWE-399,CVE-2011-0534,https://git
         }
         if (parsingRequestLinePhase == 4) {
             // Mark the current buffer position
-            
+
             int end = 0;
             //
             // Reading the URI
@@ -3374,13 +3374,13 @@ Java,2,S033551,high,high,Resource/Availability,CWE-399,CVE-2011-0534,https://git
                 if (buf[pos] == Constants.SP || buf[pos] == Constants.HT) {
                     space = true;
                     end = pos;
-                } else if ((buf[pos] == Constants.CR) 
+                } else if ((buf[pos] == Constants.CR)
                            || (buf[pos] == Constants.LF)) {
                     // HTTP/0.9 style request
                     parsingRequestLineEol = true;
                     space = true;
                     end = pos;
-                } else if ((buf[pos] == Constants.QUESTION) 
+                } else if ((buf[pos] == Constants.QUESTION)
                            && (parsingRequestLineQPos == -1)) {
                     parsingRequestLineQPos = pos;
                 }
@@ -3388,7 +3388,7 @@ Java,2,S033551,high,high,Resource/Availability,CWE-399,CVE-2011-0534,https://git
             }
             request.unparsedURI().setBytes(buf, parsingRequestLineStart, end - parsingRequestLineStart);
             if (parsingRequestLineQPos >= 0) {
-                request.queryString().setBytes(buf, parsingRequestLineQPos + 1, 
+                request.queryString().setBytes(buf, parsingRequestLineQPos + 1,
                                                end - parsingRequestLineQPos - 1);
                 request.requestURI().setBytes(buf, parsingRequestLineStart, parsingRequestLineQPos - parsingRequestLineStart);
             } else {
@@ -3414,9 +3414,9 @@ Java,2,S033551,high,high,Resource/Availability,CWE-399,CVE-2011-0534,https://git
             parsingRequestLineStart = pos;
             parsingRequestLinePhase = 6;
         }
-        if (parsingRequestLinePhase == 6) { 
+        if (parsingRequestLinePhase == 6) {
             // Mark the current buffer position
-            
+
             end = 0;
             //
             // Reading the protocol
@@ -3428,7 +3428,7 @@ Java,2,S033551,high,high,Resource/Availability,CWE-399,CVE-2011-0534,https://git
                     if (!fill(true, false)) //request line parsing
                         return false;
                 }
-        
+
                 if (buf[pos] == Constants.CR) {
                     end = pos;
                 } else if (buf[pos] == Constants.LF) {
@@ -3438,7 +3438,7 @@ Java,2,S033551,high,high,Resource/Availability,CWE-399,CVE-2011-0534,https://git
                 }
                 pos++;
             }
-        
+
             if ( (end - parsingRequestLineStart) > 0) {
                 request.protocol().setBytes(buf, parsingRequestLineStart, end - parsingRequestLineStart);
             } else {
@@ -4535,7 +4535,7 @@ PHP,2,S016389,medium,high,Crypto/Trust,CWE-330,CVE-2021-4240,https://github.com/
         }
 
         $dirauthconfig = psm_get_conf('dirauth_status');
-        
+
         // LDAP auth enabled
         if ($dirauthconfig === '1') {
             $ldaplibpath = realpath(
@@ -7034,7 +7034,7 @@ TypeScript,6,S052957,medium,high,Information Exposure,CWE-532,CVE-2021-32074,htt
         const { value, request, cachedResponse } = result;
         if (cachedResponse) {
             core.debug('ℹ using cached response');
-        }        
+        }
         command.issue('add-mask', value);
         if (exportEnv) {
             core.exportVariable(request.envVarName, `${value}`);

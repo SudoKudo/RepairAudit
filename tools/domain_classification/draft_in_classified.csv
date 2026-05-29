@@ -141,7 +141,7 @@ csum_copy_err:
 	/* starting over for a new packet */
 	msg->msg_flags &= ~MSG_TRUNC;
 	goto try_again;
-}",network_security_engineer,site_reliability_engineer|network_security_engineer,Networking / Distributed Systems,"[""Systems / Kernel / Low-Level Programming"", ""Security / Application Security""]",qwen2.5-coder:32b
+}",network_security_engineer,site_reliability_engineer|network_security_engineer,Networking / Distributed Systems,[],qwen2.5-coder:14b
 C,2,S047743,low,mid,Input Validation/Injection,CWE-20,CVE-2015-8704,https://github.com/isc-projects/bind9,lib/dns/rdata/in_1/apl_42.c,"totext_in_apl(ARGS_TOTEXT) {
 	isc_region_t sr;
 	isc_region_t ir;
@@ -204,7 +204,7 @@ C,2,S047743,low,mid,Input Validation/Injection,CWE-20,CVE-2015-8704,https://gith
 		sep = "" "";
 	}
 	return (ISC_R_SUCCESS);
-}",network_security_engineer,web_security_developer|network_security_engineer,Systems / Kernel / Low-Level Programming,"[""Security / Application Security"", ""General Software Utility""]",qwen2.5-coder:32b
+}",network_security_engineer,web_security_developer|network_security_engineer,Backend / API Development,"[""Security / Application Security"", ""Networking / Distributed Systems""]",qwen2.5-coder:14b
 C,3,S028413,low,low,Resource/Availability,CWE-399,CVE-2011-3934,https://github.com/FFmpeg/FFmpeg,libavcodec/fraps.c,"static av_cold int decode_end(AVCodecContext *avctx)
 {
     FrapsContext *s = (FrapsContext*)avctx->priv_data;
@@ -214,7 +214,7 @@ C,3,S028413,low,low,Resource/Availability,CWE-399,CVE-2011-3934,https://github.c
 
     av_freep(&s->tmpbuf);
     return 0;
-}",site_reliability_engineer,site_reliability_engineer,Systems / Kernel / Low-Level Programming,"[""General Software Utility""]",qwen2.5-coder:32b
+}",site_reliability_engineer,site_reliability_engineer,Systems / Kernel / Low-Level Programming,"[""Backend / API Development""]",qwen2.5-coder:14b
 C,4,S052202,medium,mid,Concurrency/State,CWE-362,CVE-2021-44731,https://github.com/snapcore/snapd,cmd/snap-confine/mount-support.c,"static void setup_private_mount(const char *snap_name)
 {
 	// Create a 0700 base directory. This is the ""base"" directory that is
@@ -292,7 +292,7 @@ C,4,S052202,medium,mid,Concurrency/State,CWE-362,CVE-2021-44731,https://github.c
 	}
 	sc_do_mount(tmp_dir, ""/tmp"", NULL, MS_BIND, NULL);
 	sc_do_mount(""none"", ""/tmp"", NULL, MS_PRIVATE, NULL);
-}",systems_security_engineer,concurrent_systems_engineer|systems_security_engineer,Embedded / IoT / Firmware,"[""Systems / Kernel / Low-Level Programming"", ""Security / Application Security""]",qwen2.5-coder:32b
+}",systems_security_engineer,concurrent_systems_engineer|systems_security_engineer,Systems / Kernel / Low-Level Programming,"[""Security / Application Security""]",qwen2.5-coder:14b
 C,5,S045075,low,high,Memory/Pointer Safety,CWE-125,CVE-2018-15157,https://github.com/libyal/libfsclfs,libfsclfs/libfsclfs_stream.c,"int libfsclfs_stream_get_record_by_lsn(
      libfsclfs_stream_t *stream,
      uint64_t record_lsn,
@@ -424,7 +424,7 @@ C,5,S045075,low,high,Memory/Pointer Safety,CWE-125,CVE-2018-15157,https://github
 		}
 	}
 	return( result );
-}",devsecops_engineer,systems_security_engineer|devsecops_engineer,Systems / Kernel / Low-Level Programming,"[""Security / Application Security"", ""General Software Utility""]",qwen2.5-coder:32b
+}",devsecops_engineer,systems_security_engineer|devsecops_engineer,Systems / Kernel / Low-Level Programming,"[""Backend / API Development"", ""Database / Persistence""]",qwen2.5-coder:14b
 C,6,S057577,medium,mid,Access Control/Auth,CWE-264,CVE-2014-0181,https://github.com/torvalds/linux,net/sched/act_api.c,"static int tc_ctl_action(struct sk_buff *skb, struct nlmsghdr *n)
 {
 	struct net *net = sock_net(skb->sk);
@@ -473,7 +473,7 @@ replay:
 	}
 
 	return ret;
-}",network_security_engineer,identity_and_access_engineer|network_security_engineer,Networking / Distributed Systems,"[""Systems / Kernel / Low-Level Programming"", ""Security / Application Security""]",qwen2.5-coder:32b
+}",network_security_engineer,identity_and_access_engineer|network_security_engineer,Networking / Distributed Systems,"[""Security / Application Security""]",qwen2.5-coder:14b
 C,7,S025029,high,high,Memory/Pointer Safety,CWE-125,CVE-2016-5039,https://github.com/davea42/libdwarf-code,dwarfdump/print_macro.c,"print_macro_ops(Dwarf_Debug dbg,
     Dwarf_Macro_Context mcontext,
     Dwarf_Unsigned number_of_ops)
@@ -671,7 +671,7 @@ C,7,S025029,high,high,Memory/Pointer Safety,CWE-125,CVE-2016-5039,https://github
             }
         }
     }
-}",database_security_engineer,systems_security_engineer|database_security_engineer,Systems / Kernel / Low-Level Programming,"[""General Software Utility"", ""Security / Application Security""]",qwen2.5-coder:32b
+}",database_security_engineer,systems_security_engineer|database_security_engineer,Systems / Kernel / Low-Level Programming,"[""Backend / API Development""]",qwen2.5-coder:14b
 C,8,S055500,high,high,Crypto/Trust,CWE-310,CVE-2013-5915,https://github.com/polarssl/polarssl,library/ssl_srv.c,"static int ssl_parse_client_key_exchange( ssl_context *ssl )
 {
     int ret;
@@ -821,7 +821,7 @@ C,8,S055500,high,high,Crypto/Trust,CWE-310,CVE-2013-5915,https://github.com/pola
     SSL_DEBUG_MSG( 2, ( ""<= parse client key exchange"" ) );
 
     return( 0 );
-}",cryptography_engineer,cryptography_engineer|web_security_developer,Security / Application Security,"[""Backend / API Development""]",qwen2.5-coder:32b
+}",cryptography_engineer,cryptography_engineer|web_security_developer,Security / Application Security,"[""Networking / Distributed Systems""]",qwen2.5-coder:14b
 C,9,S044077,medium,high,Information Exposure,CWE-532,CVE-2021-22030,https://github.com/greenplum-db/gpdb,src/backend/utils/error/elog.c,"write_syslogger_in_csv(ErrorData *edata, bool amsyslogger)
 {
 	/* timestamp_with_millisecond */
@@ -938,7 +938,7 @@ C,9,S044077,medium,high,Information Exposure,CWE-532,CVE-2021-22030,https://gith
 		write_syslogger_file_binary(LOG_EOL, strlen(LOG_EOL), LOG_DESTINATION_STDERR);
 	else
 		write(fileno(stderr), LOG_EOL, strlen(LOG_EOL));
-}",database_security_engineer,privacy_security_engineer|web_security_developer|database_security_engineer|systems_security_engineer,Backend / API Development,"[""Database / Persistence"", ""Security / Application Security""]",qwen2.5-coder:32b
+}",database_security_engineer,privacy_security_engineer|web_security_developer|database_security_engineer|systems_security_engineer,Backend / API Development,"[""Database / Persistence"", ""Security / Application Security""]",qwen2.5-coder:14b
 C#,1,S015742,medium,mid,Access Control/Auth,CWE-863,CVE-2022-23627,https://github.com/JustArchiNET/ArchiSteamFarm,ArchiSteamFarm/Steam/Interaction/Commands.cs,"	private static async Task<string?> ResponseInput(EAccess access, string botNames, string propertyName, string inputValue) {
 		if (!Enum.IsDefined(access)) {
 			throw new InvalidEnumArgumentException(nameof(access), (int) access, typeof(EAccess));
@@ -967,7 +967,7 @@ C#,1,S015742,medium,mid,Access Control/Auth,CWE-863,CVE-2022-23627,https://githu
 		List<string> responses = new(results.Where(static result => !string.IsNullOrEmpty(result))!);
 
 		return responses.Count > 0 ? string.Join(Environment.NewLine, responses) : null;
-	}",database_security_engineer,identity_and_access_engineer|web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security"", ""General Software Utility""]",qwen2.5-coder:32b
+	}",database_security_engineer,identity_and_access_engineer|web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 C#,2,S051534,medium,high,Input Validation/Injection,CWE-79,CVE-2008-3422,https://github.com/mono/mono,mcs/class/System.Web/System.Web.UI.HtmlControls/HtmlForm.cs,"		protected override void RenderAttributes (HtmlTextWriter w)
 		{
 			/* Need to always render: name, method, action
@@ -1039,7 +1039,7 @@ C#,2,S051534,medium,high,Input Validation/Injection,CWE-79,CVE-2008-3422,https:/
 			Attributes.Remove (""target"");
 
 			base.RenderAttributes (w);
-		}",database_security_engineer,web_security_developer|database_security_engineer,Frontend / UI Engineering,"[""Backend / API Development"", ""Security / Application Security""]",qwen2.5-coder:32b
+		}",database_security_engineer,web_security_developer|database_security_engineer,Frontend / UI Engineering,"[""Backend / API Development"", ""Security / Application Security""]",qwen2.5-coder:14b
 C#,3,S015723,high,high,Input Validation/Injection,CWE-20,CVE-2021-32795,https://github.com/JustArchiNET/ArchiSteamFarm,ArchiSteamFarm/Commands.cs,"		internal async Task HandleMessage(ulong chatGroupID, ulong chatID, ulong steamID, string message) {
 			if ((chatGroupID == 0) || (chatID == 0) || (steamID == 0) || !new SteamID(steamID).IsIndividualAccount || string.IsNullOrEmpty(message)) {
 				throw new ArgumentNullException(nameof(chatGroupID) + "" || "" + nameof(chatID) + "" || "" + nameof(steamID) + "" || "" + nameof(message));
@@ -1097,7 +1097,7 @@ C#,3,S015723,high,high,Input Validation/Injection,CWE-20,CVE-2021-32795,https://
 				Bot.ArchiLogger.LogGenericWarning(string.Format(Strings.WarningFailedWithError, nameof(Bot.SendMessage)));
 				Bot.ArchiLogger.LogGenericDebug(string.Format(Strings.Content, response));
 			}
-		}",database_security_engineer,web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security"", ""Desktop / Enterprise Applications""]",qwen2.5-coder:32b
+		}",database_security_engineer,web_security_developer|database_security_engineer,Backend / API Development,"[""Frontend / UI Engineering""]",qwen2.5-coder:14b
 C#,4,S041703,low,mid,Information Exposure,CWE-209,CVE-2024-43376,https://github.com/umbraco/Umbraco-CMS,src/Umbraco.Web.Common/AspNetCore/AspNetCoreHostingEnvironment.cs,"    public AspNetCoreHostingEnvironment(
         IOptionsMonitor<HostingSettings> hostingSettings,
         IOptionsMonitor<WebRoutingSettings> webRoutingSettings,
@@ -1132,7 +1132,7 @@ C#,4,S041703,low,mid,Information Exposure,CWE-209,CVE-2024-43376,https://github.
         {
             ApplicationMainUrl = new Uri(_webRoutingSettings.CurrentValue.UmbracoApplicationUrl);
         }
-    }",database_security_engineer,privacy_security_engineer|database_security_engineer,Backend / API Development,"[""Developer Tooling / Build Systems"", ""Cloud / DevOps / Platform Engineering""]",qwen2.5-coder:32b
+    }",database_security_engineer,privacy_security_engineer|database_security_engineer,Backend / API Development,"[""Cloud / DevOps / Platform Engineering""]",qwen2.5-coder:14b
 C#,5,S047545,high,high,Input Validation/Injection,CWE-79,CVE-2008-3422,https://github.com/mono/mono,mcs/class/System.Web/System.Web.UI.HtmlControls/HtmlForm.cs,"		protected override void RenderAttributes (HtmlTextWriter w)
 		{
 			/* Need to always render: method, action and id
@@ -1225,7 +1225,7 @@ C#,5,S047545,high,high,Input Validation/Injection,CWE-79,CVE-2008-3422,https://g
 			Attributes.Remove (""target"");
 
 			base.RenderAttributes (w);
-		}",database_security_engineer,web_security_developer|database_security_engineer,Frontend / UI Engineering,"[""Backend / API Development"", ""Security / Application Security""]",qwen2.5-coder:32b
+		}",database_security_engineer,web_security_developer|database_security_engineer,Frontend / UI Engineering,"[""Backend / API Development""]",qwen2.5-coder:14b
 C#,6,S015728,high,high,Access Control/Auth,CWE-863,CVE-2022-23627,https://github.com/JustArchiNET/ArchiSteamFarm,ArchiSteamFarm/Steam/Interaction/Commands.cs,"	public async Task<string?> Response(EAccess access, string message, ulong steamID = 0) {
 		if (!Enum.IsDefined(access)) {
 			throw new InvalidEnumArgumentException(nameof(access), (int) access, typeof(EAccess));
@@ -1459,7 +1459,7 @@ C#,6,S015728,high,high,Access Control/Auth,CWE-863,CVE-2022-23627,https://github
 						return !string.IsNullOrEmpty(pluginsResponse) ? pluginsResponse : ResponseUnknown(access);
 				}
 		}
-	}",cryptography_engineer,identity_and_access_engineer|web_security_developer|cryptography_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+	}",cryptography_engineer,identity_and_access_engineer|web_security_developer|cryptography_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 C#,7,S007507,low,low,Access Control/Auth,CWE-918,CVE-2017-0907,https://github.com/recurly/recurly-client-net,Library/Subscription.cs,"        public RecurlyList<CouponRedemption> GetRedemptions()
         {
             var coupons = new CouponRedemptionList();
@@ -1468,7 +1468,7 @@ C#,7,S007507,low,low,Access Control/Auth,CWE-918,CVE-2017-0907,https://github.co
                 coupons.ReadXmlList);
 
             return statusCode == HttpStatusCode.NotFound ? null : coupons;
-        }",database_security_engineer,identity_and_access_engineer|web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+        }",database_security_engineer,identity_and_access_engineer|web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 C#,8,S029645,low,high,Input Validation/Injection,CWE-611,CVE-2023-24323,https://github.com/i7MEDIA/mojoportal,mojoPortal.Features.Data.MySql/Blog/DBBlog.cs,"        public static IDataReader GetSingleBlog(int itemId, DateTime currentTime)
         {
             
@@ -1518,7 +1518,7 @@ C#,8,S029645,low,high,Input Validation/Injection,CWE-611,CVE-2023-24323,https://
                 sqlCommand.ToString(),
                 arParams);
 
-        }",database_security_engineer,web_security_developer|database_security_engineer,Database / Persistence,"[""Security / Application Security""]",qwen2.5-coder:32b
+        }",database_security_engineer,web_security_developer|database_security_engineer,Database / Persistence,"[""Security / Application Security""]",qwen2.5-coder:14b
 C#,9,S001994,medium,high,Crypto/Trust,CWE-295,CVE-2015-2318,https://github.com/mono/mono,mcs/class/Mono.Security/Mono.Security.Protocol.Tls/RecordProtocol.cs,"		private void InternalReceiveRecordCallback(IAsyncResult asyncResult)
 		{
 			ReceiveRecordAsyncResult internalResult = asyncResult.AsyncState as ReceiveRecordAsyncResult;
@@ -1606,7 +1606,7 @@ C#,9,S001994,medium,high,Crypto/Trust,CWE-295,CVE-2015-2318,https://github.com/m
 				internalResult.SetComplete(ex);
 			}
 
-		}",cryptography_engineer,cryptography_engineer|database_security_engineer,Security / Application Security,"[""Backend / API Development"", ""Systems / Kernel / Low-Level Programming""]",qwen2.5-coder:32b
+		}",cryptography_engineer,cryptography_engineer|database_security_engineer,Security / Application Security,"[""Backend / API Development"", ""Networking / Distributed Systems""]",qwen2.5-coder:14b
 C++,1,S055784,low,high,Input Validation/Injection,CWE-20,CVE-2018-25004,https://github.com/mongodb/mongo,src/mongo/db/commands/find_cmd.cpp,"    Status explain(OperationContext* opCtx,
                    const OpMsgRequest& request,
                    ExplainOptions::Verbosity verbosity,
@@ -1687,7 +1687,7 @@ C++,1,S055784,low,high,Input Validation/Injection,CWE-20,CVE-2018-25004,https://
         // Got the execution tree. Explain it.
         Explain::explainStages(exec.get(), collection, verbosity, out);
         return Status::OK();
-    }",database_security_engineer,web_security_developer|database_security_engineer|devsecops_engineer|embedded_security_engineer,Backend / API Development,"[""Database / Persistence"", ""Security / Application Security""]",qwen2.5-coder:32b
+    }",database_security_engineer,web_security_developer|database_security_engineer|devsecops_engineer|embedded_security_engineer,Backend / API Development,"[""Database / Persistence""]",qwen2.5-coder:14b
 C++,2,S023149,low,mid,Resource/Availability,CWE-399,CVE-2011-3934,https://github.com/FFmpeg/FFmpeg,libavcodec/eamad.c,"static void decode_mb(MadContext *s, int inter)
 {
     int mv_map = 0;
@@ -1715,7 +1715,7 @@ C++,2,S023149,low,mid,Resource/Availability,CWE-399,CVE-2011-3934,https://github
             idct_put(s, s->block, s->mb_x, s->mb_y, j);
         }
     }
-}",site_reliability_engineer,site_reliability_engineer,Systems / Kernel / Low-Level Programming,"[""Embedded / IoT / Firmware"", ""Game / Graphics""]",qwen2.5-coder:32b
+}",site_reliability_engineer,site_reliability_engineer,Systems / Kernel / Low-Level Programming,[],qwen2.5-coder:14b
 C++,3,S042747,medium,high,Access Control/Auth,CWE-862,CVE-2023-50976,https://github.com/redpanda-data/redpanda,src/v/kafka/server/server.cc,"ss::future<response_ptr> add_partitions_to_txn_handler::handle(
   request_context ctx, [[maybe_unused]] ss::smp_service_group g) {
     return ss::do_with(std::move(ctx), [](request_context& ctx) {
@@ -1805,7 +1805,7 @@ C++,3,S042747,medium,high,Access Control/Auth,CWE-862,CVE-2023-50976,https://git
               return ctx.respond(std::move(response));
           });
     });
-}",devsecops_engineer,identity_and_access_engineer|web_security_developer|devsecops_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+}",devsecops_engineer,identity_and_access_engineer|web_security_developer|devsecops_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 C++,4,S045211,high,high,Crypto/Trust,CWE-295,CVE-2021-40830,https://github.com/awslabs/aws-c-io,source/windows/windows_pki_utils.c,"int aws_import_key_pair_to_cert_context(
     struct aws_allocator *alloc,
     const struct aws_byte_cursor *public_cert_chain,
@@ -2023,7 +2023,7 @@ clean_up:
     }
 
     return result;
-}",cryptography_engineer,cryptography_engineer|database_security_engineer|systems_security_engineer,Systems / Kernel / Low-Level Programming,"[""Security / Application Security"", ""Cloud / DevOps / Platform Engineering""]",qwen2.5-coder:32b
+}",cryptography_engineer,cryptography_engineer|database_security_engineer|systems_security_engineer,Security / Application Security,"[""Backend / API Development"", ""Systems / Kernel / Low-Level Programming""]",qwen2.5-coder:14b
 C++,5,S039703,low,low,Memory/Pointer Safety,CWE-119,CVE-2016-3377,https://github.com/chakra-core/ChakraCore,lib/Common/Memory/CustomHeap.cpp,"void Heap::FreeLargeObjects()
 {
     CodePageAllocators::AutoLock autoLock(this->codePageAllocators);
@@ -2038,7 +2038,7 @@ C++,5,S039703,low,low,Memory/Pointer Safety,CWE-119,CVE-2016-3377,https://github
             largeObjectIter.RemoveCurrent(this->auxiliaryAllocator);
     }
     NEXT_DLISTBASE_ENTRY_EDITING;
-}",systems_security_engineer,systems_security_engineer,Systems / Kernel / Low-Level Programming,"[""Security / Application Security""]",qwen2.5-coder:32b
+}",systems_security_engineer,systems_security_engineer,Systems / Kernel / Low-Level Programming,"[""General Software Utility""]",qwen2.5-coder:14b
 C++,6,S006388,high,high,Memory/Pointer Safety,CWE-125,CVE-2019-13615,https://github.com/Matroska-Org/libebml,src/EbmlElement.cpp,"EbmlElement * EbmlElement::FindNextElement(IOCallback & DataStream, const EbmlSemanticContext & Context, int & UpperLevel,
                                            uint64 MaxDataSize, bool AllowDummyElt, unsigned int MaxLowerLevel)
 {
@@ -2156,7 +2156,7 @@ C++,6,S006388,high,high,Memory/Pointer Safety,CWE-125,CVE-2019-13615,https://git
   } while ( MaxDataSize > DataStream.getFilePointer() - SizeIdx + PossibleID_Length );
 
   return NULL;
-}",network_security_engineer,systems_security_engineer|network_security_engineer|database_security_engineer,Systems / Kernel / Low-Level Programming,"[""Backend / API Development"", ""Security / Application Security""]",qwen2.5-coder:32b
+}",network_security_engineer,systems_security_engineer|network_security_engineer|database_security_engineer,Systems / Kernel / Low-Level Programming,[],qwen2.5-coder:14b
 C++,7,S006386,medium,mid,Information Exposure,CWE-200,CVE-2015-8790,https://github.com/Matroska-Org/libebml,src/EbmlUnicodeString.cpp,"void UTFstring::UpdateFromUTF8()
 {
   delete [] _Data;
@@ -2197,7 +2197,7 @@ C++,7,S006386,medium,mid,Information Exposure,CWE-200,CVE-2015-8790,https://gith
       break;
   }
   _Data[j] = 0;
-}",privacy_security_engineer,privacy_security_engineer,General Software Utility,"[""Security / Application Security"", ""Desktop / Enterprise Applications""]",qwen2.5-coder:32b
+}",privacy_security_engineer,privacy_security_engineer,General Software Utility,[],qwen2.5-coder:14b
 C++,8,S000841,high,high,Resource/Availability,CWE-399,CVE-2014-8481,https://github.com/torvalds/linux,arch/x86/kvm/emulate.c,"int x86_decode_insn(struct x86_emulate_ctxt *ctxt, void *insn, int insn_len)
 {
 	int rc = X86EMUL_CONTINUE;
@@ -2445,7 +2445,7 @@ done:
 		ctxt->memopp->addr.mem.ea += ctxt->_eip;
 
 	return (rc != X86EMUL_CONTINUE) ? EMULATION_FAILED : EMULATION_OK;
-}",site_reliability_engineer,site_reliability_engineer,Systems / Kernel / Low-Level Programming,"[""Embedded / IoT / Firmware"", ""Networking / Distributed Systems""]",qwen2.5-coder:32b
+}",site_reliability_engineer,site_reliability_engineer,Systems / Kernel / Low-Level Programming,"[""Backend / API Development""]",qwen2.5-coder:14b
 C++,9,S037469,medium,mid,Concurrency/State,CWE-362,CVE-2015-6761,https://github.com/FFmpeg/FFmpeg,libavcodec/vp8.c,"int update_dimensions(VP8Context *s, int width, int height, int is_vp7)
 {
     AVCodecContext *avctx = s->avctx;
@@ -2498,14 +2498,14 @@ C++,9,S037469,medium,mid,Concurrency/State,CWE-362,CVE-2015-6761,https://github.
     s->macroblocks = s->macroblocks_base + 1;
 
     return 0;
-}",systems_security_engineer,concurrent_systems_engineer|systems_security_engineer,Systems / Kernel / Low-Level Programming,"[""Networking / Distributed Systems""]",qwen2.5-coder:32b
+}",systems_security_engineer,concurrent_systems_engineer|systems_security_engineer,Systems / Kernel / Low-Level Programming,[],qwen2.5-coder:14b
 Go,1,S012847,low,low,Access Control/Auth,CWE-863,CVE-2022-24841,https://github.com/fleetdm/fleet,server/service/users.go,"func (svc *Service) DeleteUser(ctx context.Context, id uint) error {
 	if err := svc.authz.Authorize(ctx, &fleet.User{ID: id}, fleet.ActionWrite); err != nil {
 		return err
 	}
 
 	return svc.ds.DeleteUser(ctx, id)
-}",identity_and_access_engineer,identity_and_access_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+}",identity_and_access_engineer,identity_and_access_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 Go,2,S007043,high,high,Concurrency/State,CWE-362,CVE-2021-30465,https://github.com/opencontainers/runc,libcontainer/rootfs_linux.go,"func mountToRootfs(m *configs.Mount, c *mountConfig) error {
 	rootfs := c.root
 	mountLabel := c.label
@@ -2651,7 +2651,7 @@ Go,2,S007043,high,high,Concurrency/State,CWE-362,CVE-2021-30465,https://github.c
 		return mountPropagate(m, rootfs, mountLabel)
 	}
 	return nil
-}",devsecops_engineer,concurrent_systems_engineer|devsecops_engineer,Backend / API Development,"[""Security / Application Security"", ""Systems / Kernel / Low-Level Programming""]",qwen2.5-coder:32b
+}",devsecops_engineer,concurrent_systems_engineer|devsecops_engineer,Systems / Kernel / Low-Level Programming,"[""Cloud / DevOps / Platform Engineering""]",qwen2.5-coder:14b
 Go,3,S022556,medium,high,Crypto/Trust,CWE-347,CVE-2023-47122,https://github.com/sigstore/gitsign,internal/gitsign/gitsign.go,"func NewVerifierWithCosignOpts(ctx context.Context, cfg *config.Config, opts *cosignopts.CertVerifyOptions) (*Verifier, error) {
 	root, intermediate, err := fulcioroots.NewFromConfig(ctx, cfg)
 	if err != nil {
@@ -2727,7 +2727,7 @@ Go,3,S022556,medium,high,Crypto/Trust,CWE-347,CVE-2023-47122,https://github.com/
 		cert:  certverifier,
 		rekor: rekor,
 	}, nil
-}",cryptography_engineer,cryptography_engineer,Security / Application Security,"[""Backend / API Development"", ""Developer Tooling / Build Systems""]",qwen2.5-coder:32b
+}",cryptography_engineer,cryptography_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 Go,4,S015007,medium,high,Memory/Pointer Safety,CWE-129,CVE-2021-3121,https://github.com/gogo/protobuf,test/fuzztests/fuzz.pb.go,"func (m *Nil) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
@@ -2781,7 +2781,7 @@ Go,4,S015007,medium,high,Memory/Pointer Safety,CWE-129,CVE-2021-3121,https://git
 		return io.ErrUnexpectedEOF
 	}
 	return nil
-}",systems_security_engineer,systems_security_engineer,General Software Utility,"[""Backend / API Development"", ""Systems / Kernel / Low-Level Programming""]",qwen2.5-coder:32b
+}",systems_security_engineer,systems_security_engineer,Backend / API Development,"[""Networking / Distributed Systems"", ""Security / Application Security""]",qwen2.5-coder:14b
 Go,5,S035729,high,high,Memory/Pointer Safety,CWE-125,CVE-2023-24535,https://github.com/protocolbuffers/protobuf-go,internal/encoding/text/decode_number.go,"func parseNumber(input []byte) number {
 	kind := numDec
 	var size int
@@ -2918,7 +2918,7 @@ Go,5,S035729,high,high,Memory/Pointer Safety,CWE-125,CVE-2023-24535,https://gith
 	}
 
 	return number{kind: kind, neg: neg, size: size, sep: sep}
-}",systems_security_engineer,systems_security_engineer,General Software Utility,"[""Systems / Kernel / Low-Level Programming"", ""Security / Application Security""]",qwen2.5-coder:32b
+}",systems_security_engineer,systems_security_engineer,Backend / API Development,"[""Systems / Kernel / Low-Level Programming""]",qwen2.5-coder:14b
 Go,6,S053424,low,mid,Resource/Availability,CWE-400,CVE-2022-31073,https://github.com/kubeedge/kubeedge,cloud/pkg/admissioncontroller/common.go,"func serve(w http.ResponseWriter, r *http.Request, hook hookFunc) {
 	var body []byte
 	if r.Body != nil {
@@ -2959,7 +2959,7 @@ Go,6,S053424,low,mid,Resource/Availability,CWE-400,CVE-2022-31073,https://github
 	if _, err := w.Write(respBytes); err != nil {
 		klog.Exitf(""cannot write response %v"", err)
 	}
-}",web_security_developer,site_reliability_engineer|web_security_developer,Cloud / DevOps / Platform Engineering,"[""Backend / API Development"", ""Systems / Kernel / Low-Level Programming""]",qwen2.5-coder:32b
+}",web_security_developer,site_reliability_engineer|web_security_developer,Backend / API Development,"[""Security / Application Security"", ""Cloud / DevOps / Platform Engineering""]",qwen2.5-coder:14b
 Go,7,S039441,low,mid,Input Validation/Injection,CWE-22,CVE-2022-26945,https://github.com/hashicorp/go-getter,get_http_test.go,"func TestHttpGetter_authNetrc(t *testing.T) {
 	ln := testHttpServer(t)
 	defer ln.Close()
@@ -2994,7 +2994,7 @@ Go,7,S039441,low,mid,Input Validation/Injection,CWE-22,CVE-2022-26945,https://gi
 	if _, err := os.Stat(mainPath); err != nil {
 		t.Fatalf(""err: %s"", err)
 	}
-}",web_security_developer,web_security_developer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+}",web_security_developer,web_security_developer,Backend / API Development,"[""Networking / Distributed Systems""]",qwen2.5-coder:14b
 Go,8,S019806,high,high,Access Control/Auth,CWE-276,CVE-2022-27649,https://github.com/containers/podman,libpod/oci_conmon_exec_linux.go,"func prepareProcessExec(c *Container, options *ExecOptions, env []string, sessionID string) (*os.File, error) {
 	f, err := ioutil.TempFile(c.execBundlePath(sessionID), ""exec-process-"")
 	if err != nil {
@@ -3123,7 +3123,7 @@ Go,8,S019806,high,high,Access Control/Auth,CWE-276,CVE-2022-27649,https://github
 		return nil, err
 	}
 	return f, nil
-}",cryptography_engineer,identity_and_access_engineer|web_security_developer|cryptography_engineer|devsecops_engineer,Cloud / DevOps / Platform Engineering,"[""Backend / API Development"", ""Security / Application Security""]",qwen2.5-coder:32b
+}",cryptography_engineer,identity_and_access_engineer|web_security_developer|cryptography_engineer|devsecops_engineer,Cloud / DevOps / Platform Engineering,"[""Backend / API Development"", ""Security / Application Security""]",qwen2.5-coder:14b
 Go,9,S057211,medium,high,Information Exposure,CWE-200,CVE-2018-19148,https://github.com/mholt/caddy,caddy.go,"func startWithListenerFds(cdyfile Input, inst *Instance, restartFds map[string]restartTriple) error {
 	if cdyfile == nil {
 		cdyfile = CaddyfileInput{}
@@ -3193,7 +3193,7 @@ Go,9,S057211,medium,high,Information Exposure,CWE-200,CVE-2018-19148,https://git
 	mu.Unlock()
 
 	return nil
-}",network_security_engineer,privacy_security_engineer|network_security_engineer,Backend / API Development,"[""Cloud / DevOps / Platform Engineering"", ""General Software Utility""]",qwen2.5-coder:32b
+}",network_security_engineer,privacy_security_engineer|network_security_engineer,Backend / API Development,"[""Cloud / DevOps / Platform Engineering""]",qwen2.5-coder:14b
 Java,1,S058645,medium,high,Information Exposure,CWE-200,CVE-2024-1979,https://github.com/quarkusio/quarkus,extensions/kubernetes/vanilla/deployment/src/main/java/io/quarkus/kubernetes/deployment/KubernetesCommonHelper.java,"    private static List<DecoratorBuildItem> createAnnotationDecorators(Optional<Project> project, String target, String name,
             PlatformConfiguration config,
             Optional<MetricsCapabilityBuildItem> metricsConfiguration,
@@ -3270,7 +3270,7 @@ Java,1,S058645,medium,high,Information Exposure,CWE-200,CVE-2024-1979,https://gi
 
         //Add metrics annotations
         return result;
-    }",cryptography_engineer,privacy_security_engineer|cryptography_engineer|database_security_engineer|devsecops_engineer,Backend / API Development,"[""Cloud / DevOps / Platform Engineering"", ""General Software Utility""]",qwen2.5-coder:32b
+    }",cryptography_engineer,privacy_security_engineer|cryptography_engineer|database_security_engineer|devsecops_engineer,Backend / API Development,"[""Cloud / DevOps / Platform Engineering""]",qwen2.5-coder:14b
 Java,2,S033551,high,high,Resource/Availability,CWE-399,CVE-2011-0534,https://github.com/apache/tomcat,java/org/apache/coyote/http11/InternalNioInputBuffer.java,"    public boolean parseRequestLine(boolean useAvailableDataOnly)
         throws IOException {
 
@@ -3451,7 +3451,7 @@ Java,2,S033551,high,high,Resource/Availability,CWE-399,CVE-2011-0534,https://git
             return true;
         }
         throw new IllegalStateException(""Invalid request line parse phase:""+parsingRequestLinePhase);
-    }",network_security_engineer,site_reliability_engineer|web_security_developer|network_security_engineer|database_security_engineer,Backend / API Development,"[""Security / Application Security"", ""Networking / Distributed Systems""]",qwen2.5-coder:32b
+    }",network_security_engineer,site_reliability_engineer|web_security_developer|network_security_engineer|database_security_engineer,Backend / API Development,"[""Security / Application Security"", ""Networking / Distributed Systems""]",qwen2.5-coder:14b
 Java,3,S054740,high,high,Access Control/Auth,CWE-918,CVE-2024-29736,https://github.com/apache/cxf,rt/rs/description/src/main/java/org/apache/cxf/jaxrs/model/wadl/WadlGenerator.java,"    protected void doFilter(ContainerRequestContext context, Message m) {
         if (!""GET"".equals(m.get(Message.HTTP_REQUEST_METHOD))) {
             return;
@@ -3518,7 +3518,7 @@ Java,3,S054740,high,high,Access Control/Auth,CWE-918,CVE-2024-29736,https://gith
         m.getExchange().put(JAXRSUtils.IGNORE_MESSAGE_WRITERS, !isJson && ignoreMessageWriters);
         Response r = Response.ok().type(type).entity(createResponseEntity(m, ui, sbMain.toString(), isJson)).build();
         context.abortWith(r);
-    }",cryptography_engineer,identity_and_access_engineer|web_security_developer|cryptography_engineer|database_security_engineer|devsecops_engineer,Backend / API Development,"[""Security / Application Security"", ""Frontend / UI Engineering""]",qwen2.5-coder:32b
+    }",cryptography_engineer,identity_and_access_engineer|web_security_developer|cryptography_engineer|database_security_engineer|devsecops_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 Java,4,S006739,medium,high,Crypto/Trust,CWE-295,CVE-2020-26117,https://github.com/TigerVNC/tigervnc,java/com/tigervnc/rfb/CSecurityTLS.java,"    public void checkServerTrusted(X509Certificate[] chain, String authType)
       throws CertificateException
     {
@@ -3599,7 +3599,7 @@ Java,4,S006739,medium,high,Crypto/Trust,CWE-295,CVE-2020-26117,https://github.co
           throw new SystemException(e.getMessage());
         }
       }
-    }",cryptography_engineer,cryptography_engineer,Security / Application Security,"[""Backend / API Development"", ""Database / Persistence""]",qwen2.5-coder:32b
+    }",cryptography_engineer,cryptography_engineer,Security / Application Security,"[""Backend / API Development"", ""General Software Utility""]",qwen2.5-coder:14b
 Java,5,S032416,low,mid,Access Control/Auth,CWE-264,CVE-2014-0096,https://github.com/apache/tomcat,java/org/apache/catalina/servlets/DefaultServlet.java,"    private File validateGlobalXsltFile(File base) {
         File candidate = new File(base, globalXsltFile);
 
@@ -3619,7 +3619,7 @@ Java,5,S032416,low,mid,Access Control/Auth,CWE-264,CVE-2014-0096,https://github.
         }
 
         return candidate;
-    }",web_security_developer,identity_and_access_engineer|web_security_developer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+    }",web_security_developer,identity_and_access_engineer|web_security_developer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 Java,6,S050525,high,high,Input Validation/Injection,CWE-20,CVE-2013-4286,https://github.com/apache/tomcat,java/org/apache/coyote/ajp/AbstractAjpProcessor.java,"    protected void prepareRequest() {
 
         // Translate the HTTP method code to a String.
@@ -3848,7 +3848,7 @@ Java,6,S050525,high,high,Input Validation/Injection,CWE-20,CVE-2013-4286,https:/
         if (error) {
             adapter.log(request, response, 0);
         }
-    }",cryptography_engineer,web_security_developer|cryptography_engineer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+    }",cryptography_engineer,web_security_developer|cryptography_engineer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 Java,7,S025776,low,mid,Resource/Availability,CWE-770,CVE-2017-13763,https://github.com/opennetworkinglab/onos,core/store/dist/src/main/java/org/onosproject/store/cluster/messaging/impl/NettyMessagingManager.java,"    private void startAcceptingConnections() throws InterruptedException {
         ServerBootstrap b = new ServerBootstrap();
         b.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
@@ -3874,7 +3874,7 @@ Java,7,S025776,low,mid,Resource/Availability,CWE-770,CVE-2017-13763,https://gith
                 log.warn(""{} failed to bind to port {} due to {}"", localEp.host(), localEp.port(), future.cause());
             }
         });
-    }",cryptography_engineer,site_reliability_engineer|cryptography_engineer|network_security_engineer|database_security_engineer|devsecops_engineer,Backend / API Development,"[""Networking / Distributed Systems"", ""Cloud / DevOps / Platform Engineering""]",qwen2.5-coder:32b
+    }",cryptography_engineer,site_reliability_engineer|cryptography_engineer|network_security_engineer|database_security_engineer|devsecops_engineer,Backend / API Development,"[""Networking / Distributed Systems"", ""Security / Application Security""]",qwen2.5-coder:14b
 Java,8,S032124,low,high,Input Validation/Injection,CWE-22,CVE-2024-23673,https://github.com/apache/sling-org-apache-sling-servlets-resolver,src/main/java/org/apache/sling/servlets/resolver/internal/SlingScriptResolverImpl.java,"    public SlingScript findScript(final ResourceResolver resourceResolver, final String name)
     throws SlingException {
 
@@ -3914,7 +3914,7 @@ Java,8,S032124,low,high,Input Validation/Injection,CWE-22,CVE-2024-23673,https:/
 
         // and finally return the script (or null)
         return script;
-    }",database_security_engineer,web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+    }",database_security_engineer,web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 Java,9,S050423,medium,high,Memory/Pointer Safety,CWE-129,CVE-2024-41564,https://github.com/emilyploszaj/em,xplat/src/main/java/dev/emi/emi/screen/EmiScreenManager.java,"	public static boolean mouseClicked(double mouseX, double mouseY, int button) {
 		EmiScreenBase base = EmiScreenBase.getCurrent();
 		if (base == null) {
@@ -3954,7 +3954,7 @@ Java,9,S050423,medium,high,Memory/Pointer Safety,CWE-129,CVE-2024-41564,https://
 			}
 		}
 		return false;
-	}",systems_security_engineer,systems_security_engineer,Frontend / UI Engineering,"[""Systems / Kernel / Low-Level Programming""]",qwen2.5-coder:32b
+	}",systems_security_engineer,systems_security_engineer,Frontend / UI Engineering,"[""Backend / API Development""]",qwen2.5-coder:14b
 JavaScript,1,S005494,high,high,Access Control/Auth,CWE-284,CVE-2015-2692,https://github.com/kzar/watchadblock,src/filtering/myfilters.js,"  function listIdForThisLocale() {
     var language = determineUserLanguage();
     switch(language) {
@@ -3985,7 +3985,7 @@ JavaScript,1,S005494,high,high,Access Control/Auth,CWE-284,CVE-2015-2692,https:/
       case 'zh': return 'chinese';
       default: return '';
     }
-  }",identity_and_access_engineer,identity_and_access_engineer,Frontend / UI Engineering,"[""Security / Application Security""]",qwen2.5-coder:32b
+  }",identity_and_access_engineer,identity_and_access_engineer,Frontend / UI Engineering,[],qwen2.5-coder:14b
 JavaScript,2,S020301,low,high,Resource/Availability,CWE-400,CVE-2024-24750,https://github.com/nodejs/undici,lib/fetch/index.js,"function fetchFinale (fetchParams, response) {
   // 1. Let timingInfo be fetchParams’s timing info.
   let timingInfo = fetchParams.timingInfo
@@ -4129,7 +4129,7 @@ JavaScript,2,S020301,low,high,Resource/Availability,CWE-400,CVE-2024-24750,https
 
     internalResponse.body.stream = byteStream
   }
-}",network_security_engineer,site_reliability_engineer|web_security_developer|network_security_engineer,Networking / Distributed Systems,"[""Backend / API Development"", ""Frontend / UI Engineering""]",qwen2.5-coder:32b
+}",network_security_engineer,site_reliability_engineer|web_security_developer|network_security_engineer,Backend / API Development,"[""Networking / Distributed Systems""]",qwen2.5-coder:14b
 JavaScript,3,S057437,low,mid,Access Control/Auth,CWE-269,CVE-2023-0967,https://github.com/IMA-WorldHealth/bhima,server/controllers/stock/reports/index.js,"function stockEntryDepotReceipt(req, res, next) {
   let report;
   const documentUuid = req.params.document_uuid;
@@ -4147,7 +4147,7 @@ JavaScript,3,S057437,low,mid,Access Control/Auth,CWE-269,CVE-2023-0967,https://g
     .then(result => res.set(result.headers).send(result.report))
     .catch(next)
     .done();
-}",database_security_engineer,identity_and_access_engineer|web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+}",database_security_engineer,identity_and_access_engineer|web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 JavaScript,4,S033061,medium,high,Crypto/Trust,CWE-295,CVE-2021-44531,https://github.com/nodejs/node,lib/tls.js,"exports.checkServerIdentity = function checkServerIdentity(hostname, cert) {
   const subject = cert.subject;
   const altNames = cert.subjectaltname;
@@ -4207,7 +4207,7 @@ JavaScript,4,S033061,medium,high,Crypto/Trust,CWE-295,CVE-2021-44531,https://git
   if (!valid) {
     return new ERR_TLS_CERT_ALTNAME_INVALID(reason, hostname, cert);
   }
-};",cryptography_engineer,cryptography_engineer|network_security_engineer,Security / Application Security,"[""Backend / API Development""]",qwen2.5-coder:32b
+};",cryptography_engineer,cryptography_engineer|network_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 JavaScript,5,S018526,high,mid,Input Validation/Injection,CWE-79,CVE-2022-3873,https://github.com/jgraph/drawio,src/main/webapp/js/integrate.min.js,"""120px"",D.style.backgroundImage=""url('""+IMAGE_PATH+""/droptarget.png')"",D.style.backgroundPosition=""center 65%"",D.style.backgroundRepeat=""no-repeat"",B=document.createElement(""div""),B.style.position=""absolute"",B.style.width=""420px"",B.style.top=""58%"",B.style.textAlign=""center"",B.style.fontSize=""18px"",B.style.color=""#a0c3ff"",mxUtils.write(B,mxResources.get(""dragImagesHere"")),D.appendChild(B));D.appendChild(G);this.container=D},LinkDialog=function(b,g,k,d,t,v,B){function G(x,E,A){A=mxUtils.button("""",A);
 A.className=""geBtn"";A.setAttribute(""title"",E);E=document.createElement(""img"");E.style.height=""26px"";E.style.width=""26px"";E.setAttribute(""src"",x);A.style.minWidth=""42px"";A.style.verticalAlign=""middle"";A.appendChild(E);y.appendChild(A)}var H=document.createElement(""div"");H.style.height=""100%"";mxUtils.write(H,mxResources.get(""editLink"")+"":"");var I=document.createElement(""div"");I.className=""geTitle"";I.style.backgroundColor=""transparent"";I.style.borderColor=""transparent"";I.style.whiteSpace=""nowrap"";I.style.textOverflow=
 ""clip"";I.style.cursor=""default"";I.style.paddingRight=""20px"";var D=document.createElement(""input"");D.setAttribute(""placeholder"",mxResources.get(""dragUrlsHere""));D.setAttribute(""type"",""text"");D.style.marginTop=""6px"";D.style.width=""97%"";D.style.boxSizing=""border-box"";D.style.backgroundImage=""url('""+Dialog.prototype.clearImage+""')"";D.style.backgroundRepeat=""no-repeat"";D.style.backgroundPosition=""100% 50%"";D.style.paddingRight=""14px"";D.style.marginBottom=""4px"";var N=document.createElement(""div"");N.setAttribute(""title"",
@@ -4222,7 +4222,7 @@ k.style.verticalAlign=""middle"";k.className=""geBtn"";y.appendChild(k);b.isOffl
 ""application/vnd.jgraph.""==x.docs[0].mimeType.substring(0,23)?E=""https://www.draw.io/#G""+x.docs[0].id:""application/vnd.google-apps.folder""==x.docs[0].mimeType&&(E=""https://drive.google.com/#folders/""+x.docs[0].id);D.value=E;D.focus()}else LinkDialog.selectedDocs=null;D.focus()};""undefined""!=typeof google&&""undefined""!=typeof google.picker&&null!=b.drive&&G(IMAGE_PATH+""/google-drive-logo.svg"",mxResources.get(""googlePlus""),function(){b.spinner.spin(document.body,mxResources.get(""authorizing""))&&b.drive.checkToken(mxUtils.bind(this,
 function(){b.spinner.stop();if(null==b.linkPicker){var x=b.drive.createLinkPicker();b.linkPicker=x.setCallback(function(E){LinkDialog.filePicked(E)}).build()}b.linkPicker.setVisible(!0)}))});""undefined""!=typeof Dropbox&&""undefined""!=typeof Dropbox.choose&&G(IMAGE_PATH+""/dropbox-logo.svg"",mxResources.get(""dropbox""),function(){Dropbox.choose({linkType:""direct"",cancel:function(){},success:function(x){D.value=x[0].link;D.focus()}})});null!=b.oneDrive&&G(IMAGE_PATH+""/onedrive-logo.svg"",mxResources.get(""oneDrive""),
 function(){b.oneDrive.pickFile(function(x,E){D.value=E.value[0].webUrl;D.focus()},!0)});null!=b.gitHub&&G(IMAGE_PATH+""/github-logo.svg"",mxResources.get(""github""),function(){b.gitHub.pickFile(function(x){if(null!=x){x=x.split(""/"");var E=x[0],A=x[1],S=x[2];x=x.slice(3,x.length).join(""/"");D.value=""https://github.com/""+E+""/""+A+""/blob/""+S+""/""+x;D.focus()}})});null!=b.gitLab&&G(IMAGE_PATH+""/gitlab-logo.svg"",mxResources.get(""gitlab""),function(){b.gitLab.pickFile(function(x){if(null!=x){x=x.split(""/"");var E=
-x[0],A=x[1],S=x[2];x=x.slice(3,x.length).join(""/"");D.value=DRAWIO_GITLAB_URL+""/""+E+""/""+A+""/blob/""+S+""/""+x;D.focus()}})});mxEvent.addListener(D,""keypress"",function(x){13==x.keyCode&&(b.hideDialog(),d(e.checked?f.value:D.value,LinkDialog.selectedDocs))});y.appendChild(q);b.editor.cancelFirst||y.appendChild(k);H.appendChild(y);this.container=H},FeedbackDialog=function(b,g,k,d){var t=document.createElement(""div""),v=document.createElement(""div"");mxUtils.write(v,mxResources.get(""sendYourFeedback""));v.style.fontSize=",devsecops_engineer,web_security_developer|devsecops_engineer,Frontend / UI Engineering,"[""Security / Application Security"", ""Cloud / DevOps / Platform Engineering""]",qwen2.5-coder:32b
+x[0],A=x[1],S=x[2];x=x.slice(3,x.length).join(""/"");D.value=DRAWIO_GITLAB_URL+""/""+E+""/""+A+""/blob/""+S+""/""+x;D.focus()}})});mxEvent.addListener(D,""keypress"",function(x){13==x.keyCode&&(b.hideDialog(),d(e.checked?f.value:D.value,LinkDialog.selectedDocs))});y.appendChild(q);b.editor.cancelFirst||y.appendChild(k);H.appendChild(y);this.container=H},FeedbackDialog=function(b,g,k,d){var t=document.createElement(""div""),v=document.createElement(""div"");mxUtils.write(v,mxResources.get(""sendYourFeedback""));v.style.fontSize=",devsecops_engineer,web_security_developer|devsecops_engineer,Frontend / UI Engineering,"[""Security / Application Security""]",qwen2.5-coder:14b
 JavaScript,6,S025721,low,high,Input Validation/Injection,CWE-79,CVE-2018-14040,https://github.com/twbs/bootstrap-rubygem,assets/javascripts/bootstrap.js,"  var Util = function ($$$1) {
     /**
      * ------------------------------------------------------------------------
@@ -4347,7 +4347,7 @@ JavaScript,6,S025721,low,high,Input Validation/Injection,CWE-79,CVE-2018-14040,h
     };
     setTransitionEndSupport();
     return Util;
-  }($);",web_security_developer,web_security_developer,Frontend / UI Engineering,"[""Security / Application Security""]",qwen2.5-coder:32b
+  }($);",web_security_developer,web_security_developer,Frontend / UI Engineering,[],qwen2.5-coder:14b
 JavaScript,7,S057489,medium,high,Memory/Pointer Safety,CWE-119,CVE-2016-10523,https://github.com/mqttjs/mqtt-packet,parser.js,"Parser.prototype._parseConnect = function () {
   var protocolId // constants id
     , clientId // Client id
@@ -4429,7 +4429,7 @@ JavaScript,7,S057489,medium,high,Memory/Pointer Safety,CWE-119,CVE-2016-10523,ht
   }
 
   return packet
-}",network_security_engineer,systems_security_engineer|web_security_developer|network_security_engineer,Networking / Distributed Systems,"[""Security / Application Security""]",qwen2.5-coder:32b
+}",network_security_engineer,systems_security_engineer|web_security_developer|network_security_engineer,Networking / Distributed Systems,"[""Backend / API Development""]",qwen2.5-coder:14b
 JavaScript,8,S031360,medium,high,Information Exposure,CWE-200,CVE-2015-1840,https://github.com/rails/jquery-rails,vendor/assets/javascripts/jquery_ujs.js,"    handleRemote: function(element) {
       var method, url, data, elCrossDomain, crossDomain, withCredentials, dataType, options;
 
@@ -4505,14 +4505,14 @@ JavaScript,8,S031360,medium,high,Information Exposure,CWE-200,CVE-2015-1840,http
       } else {
         return false;
       }
-    },",database_security_engineer,privacy_security_engineer|web_security_developer|database_security_engineer,Frontend / UI Engineering,"[""Security / Application Security""]",qwen2.5-coder:32b
+    },",database_security_engineer,privacy_security_engineer|web_security_developer|database_security_engineer,Frontend / UI Engineering,"[""Backend / API Development"", ""Networking / Distributed Systems""]",qwen2.5-coder:14b
 JavaScript,9,S017614,high,low,Resource/Availability,CWE-400,CVE-2023-3398,https://github.com/jgraph/drawio,src/main/webapp/js/app.min.js,"HoverIcons.prototype.repaint=function(){this.bbox=null;if(null!=this.currentState){this.currentState=this.getState(this.currentState);if(null!=this.currentState&&this.graph.model.isVertex(this.currentState.cell)&&this.graph.isCellConnectable(this.currentState.cell)){var a=mxRectangle.fromRectangle(this.currentState);null!=this.currentState.shape&&null!=this.currentState.shape.boundingBox&&(a=mxRectangle.fromRectangle(this.currentState.shape.boundingBox));a.grow(this.graph.tolerance);a.grow(this.arrowSpacing);
 var c=this.graph.selectionCellsHandler.getHandler(this.currentState.cell);this.graph.isTableRow(this.currentState.cell)&&(c=this.graph.selectionCellsHandler.getHandler(this.graph.model.getParent(this.currentState.cell)));var f=null;null!=c&&(a.x-=c.horizontalOffset/2,a.y-=c.verticalOffset/2,a.width+=c.horizontalOffset,a.height+=c.verticalOffset,null!=c.rotationShape&&null!=c.rotationShape.node&&""hidden""!=c.rotationShape.node.style.visibility&&""none""!=c.rotationShape.node.style.display&&null!=c.rotationShape.boundingBox&&
 (f=c.rotationShape.boundingBox));c=mxUtils.bind(this,function(n,u,m){if(null!=f){var r=new mxRectangle(u,m,n.clientWidth,n.clientHeight);mxUtils.intersects(r,f)&&(n==this.arrowUp?m-=r.y+r.height-f.y:n==this.arrowRight?u+=f.x+f.width-r.x:n==this.arrowDown?m+=f.y+f.height-r.y:n==this.arrowLeft&&(u-=r.x+r.width-f.x))}n.style.left=u+""px"";n.style.top=m+""px"";mxUtils.setOpacity(n,this.inactiveOpacity)});c(this.arrowUp,Math.round(this.currentState.getCenterX()-this.triangleUp.width/2-this.tolerance),Math.round(a.y-
 this.triangleUp.height-this.tolerance));c(this.arrowRight,Math.round(a.x+a.width-this.tolerance),Math.round(this.currentState.getCenterY()-this.triangleRight.height/2-this.tolerance));c(this.arrowDown,parseInt(this.arrowUp.style.left),Math.round(a.y+a.height-this.tolerance));c(this.arrowLeft,Math.round(a.x-this.triangleLeft.width-this.tolerance),parseInt(this.arrowRight.style.top));if(this.checkCollisions){c=this.graph.getCellAt(a.x+a.width+this.triangleRight.width/2,this.currentState.getCenterY());
 var e=this.graph.getCellAt(a.x-this.triangleLeft.width/2,this.currentState.getCenterY()),g=this.graph.getCellAt(this.currentState.getCenterX(),a.y-this.triangleUp.height/2);a=this.graph.getCellAt(this.currentState.getCenterX(),a.y+a.height+this.triangleDown.height/2);null!=c&&c==e&&e==g&&g==a&&(a=g=e=c=null);var d=this.graph.getCellGeometry(this.currentState.cell),k=mxUtils.bind(this,function(n,u){var m=this.graph.model.isVertex(n)&&this.graph.getCellGeometry(n);null==n||this.graph.model.isAncestor(n,
 this.currentState.cell)||this.graph.isSwimlane(n)||!(null==m||null==d||m.height<3*d.height&&m.width<3*d.width)?u.style.visibility=""visible"":u.style.visibility=""hidden""});k(c,this.arrowRight);k(e,this.arrowLeft);k(g,this.arrowUp);k(a,this.arrowDown)}else this.arrowLeft.style.visibility=""visible"",this.arrowRight.style.visibility=""visible"",this.arrowUp.style.visibility=""visible"",this.arrowDown.style.visibility=""visible"";this.graph.tooltipHandler.isEnabled()?(this.arrowLeft.setAttribute(""title"",mxResources.get(""plusTooltip"")),
-this.arrowRight.setAttribute(""title"",mxResources.get(""plusTooltip"")),this.arrowUp.setAttribute(""title"",mxResources.get(""plusTooltip"")),this.arrowDown.setAttribute(""title"",mxResources.get(""plusTooltip""))):(this.arrowLeft.removeAttribute(""title""),this.arrowRight.removeAttribute(""title""),this.arrowUp.removeAttribute(""title""),this.arrowDown.removeAttribute(""title""))}else this.reset();null!=this.currentState&&(this.bbox=this.computeBoundingBox(),null!=this.bbox&&this.bbox.grow(10))}};",site_reliability_engineer,site_reliability_engineer,Frontend / UI Engineering,"[""General Software Utility""]",qwen2.5-coder:32b
+this.arrowRight.setAttribute(""title"",mxResources.get(""plusTooltip"")),this.arrowUp.setAttribute(""title"",mxResources.get(""plusTooltip"")),this.arrowDown.setAttribute(""title"",mxResources.get(""plusTooltip""))):(this.arrowLeft.removeAttribute(""title""),this.arrowRight.removeAttribute(""title""),this.arrowUp.removeAttribute(""title""),this.arrowDown.removeAttribute(""title""))}else this.reset();null!=this.currentState&&(this.bbox=this.computeBoundingBox(),null!=this.bbox&&this.bbox.grow(10))}};",site_reliability_engineer,site_reliability_engineer,Frontend / UI Engineering,[],qwen2.5-coder:14b
 PHP,1,S058355,low,low,Access Control/Auth,CWE-287,CVE-2019-10643,https://github.com/contao/contao,core-bundle/src/Resources/contao/modules/ModuleRegistration.php,"	protected function sendActivationMail($arrData)
 	{
 		/** @var OptIn $optIn */
@@ -4523,7 +4523,7 @@ PHP,1,S058355,low,low,Access Control/Auth,CWE-287,CVE-2019-10643,https://github.
 		$arrTokenData = $arrData;
 		$arrTokenData['activation'] = $optInToken->getIdentifier();
 		$arrTokenData['domain'] = Idna::decode(Environment::get('host'));
-		$arrTokenData['link'] = Idna::decode(Environment::get('base')) . Environment::get('request') . ((strpos(Environment::get('request'), '?') !== false) ? '&' : '?') . 'token=' . $optInToken->getIdentifier();",devsecops_engineer,identity_and_access_engineer|web_security_developer|devsecops_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+		$arrTokenData['link'] = Idna::decode(Environment::get('base')) . Environment::get('request') . ((strpos(Environment::get('request'), '?') !== false) ? '&' : '?') . 'token=' . $optInToken->getIdentifier();",devsecops_engineer,identity_and_access_engineer|web_security_developer|devsecops_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 PHP,2,S016389,medium,high,Crypto/Trust,CWE-330,CVE-2021-4240,https://github.com/phpservermon/phpservermon,src/psm/Service/User.php,"    public function loginWithPostData($user_name, $user_password, $user_rememberme = false)
     {
         $user_name = trim($user_name);
@@ -4593,7 +4593,7 @@ PHP,2,S016389,medium,high,Crypto/Trust,CWE-330,CVE-2021-4240,https://github.com/
             }
         }
         return true;
-    }",cryptography_engineer,cryptography_engineer|web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security"", ""Database / Persistence""]",qwen2.5-coder:32b
+    }",cryptography_engineer,cryptography_engineer|web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 PHP,3,S048464,medium,high,Input Validation/Injection,CWE-22,CVE-2017-10840,https://github.com/craigk5n/webcalendar,admin.php,"function save_pref ( $prefs, $src ) {
   global $error, $my_theme;
 
@@ -4635,7 +4635,7 @@ PHP,3,S048464,medium,high,Input Validation/Injection,CWE-22,CVE-2017-10840,https
   // Reload preferences so any CSS changes will take effect.
   load_global_settings ();
   load_user_preferences ();
-}",cryptography_engineer,web_security_developer|cryptography_engineer|database_security_engineer,Backend / API Development,"[""Database / Persistence"", ""Security / Application Security""]",qwen2.5-coder:32b
+}",cryptography_engineer,web_security_developer|cryptography_engineer|database_security_engineer,Backend / API Development,"[""Database / Persistence"", ""Security / Application Security""]",qwen2.5-coder:14b
 PHP,4,S007751,low,low,Information Exposure,CWE-200,CVE-2017-15195,https://github.com/kanboard/kanboard,app/Controller/SwimlaneController.php,"    private function getSwimlane()
     {
         $swimlane = $this->swimlaneModel->getById($this->request->getIntegerParam('swimlane_id'));
@@ -4645,7 +4645,7 @@ PHP,4,S007751,low,low,Information Exposure,CWE-200,CVE-2017-15195,https://github
         }
 
         return $swimlane;
-    }",web_security_developer,privacy_security_engineer|web_security_developer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+    }",web_security_developer,privacy_security_engineer|web_security_developer,Backend / API Development,[],qwen2.5-coder:14b
 PHP,5,S016527,medium,high,Resource/Availability,CWE-400,CVE-2021-41118,https://github.com/Universal-Omega/DynamicPageList3,includes/lister/Lister.php,"	public function formatItem( Article $article, $pageText = null ) {
 		global $wgLang;
 
@@ -4706,7 +4706,7 @@ PHP,5,S016527,medium,high,Resource/Availability,CWE-400,CVE-2021-41118,https://g
 		$item = $this->replaceTagParameters( $item, $article );
 
 		return $item;
-	}",database_security_engineer,site_reliability_engineer|database_security_engineer,Backend / API Development,"[""Frontend / UI Engineering"", ""Database / Persistence""]",qwen2.5-coder:32b
+	}",database_security_engineer,site_reliability_engineer|database_security_engineer,Frontend / UI Engineering,"[""Backend / API Development"", ""Database / Persistence""]",qwen2.5-coder:14b
 PHP,6,S006266,high,high,Access Control/Auth,CWE-287,CVE-2022-29534,https://github.com/MISP/MISP,app/Controller/UsersController.php,"    public function edit()
     {
         $currentUser = $this->User->find('first', array(
@@ -4824,7 +4824,7 @@ PHP,6,S006266,high,high,Access Control/Auth,CWE-287,CVE-2022-29534,https://githu
         $this->set('id', $id);
         $this->set('canChangePassword', $this->__canChangePassword());
         $this->set('canChangeLogin', $this->__canChangeLogin());
-    }",cryptography_engineer,identity_and_access_engineer|web_security_developer|cryptography_engineer,Backend / API Development,"[""Security / Application Security"", ""Database / Persistence""]",qwen2.5-coder:32b
+    }",cryptography_engineer,identity_and_access_engineer|web_security_developer|cryptography_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 PHP,7,S006215,high,high,Information Exposure,CWE-532,CVE-2017-16946,https://github.com/MISP/MISP,app/Controller/UsersController.php,"					if ($field != 'confirm_password') array_push($fieldsOldValues, $this->User->field($field));
 					else array_push($fieldsOldValues, $this->User->field('password'));
 				}
@@ -4907,7 +4907,7 @@ PHP,7,S006215,high,high,Information Exposure,CWE-532,CVE-2017-16946,https://gith
 					}
 				}
 			}
-		} else {",database_security_engineer,privacy_security_engineer|web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security"", ""Database / Persistence""]",qwen2.5-coder:32b
+		} else {",database_security_engineer,privacy_security_engineer|web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 PHP,8,S003294,low,low,Input Validation/Injection,CWE-79,CVE-2023-3142,https://github.com/microweber/microweber,src/MicroweberPackages/Content/tests/ContentApiControllerLiveEditSaveTest.php,"    private function cleanupAndPrepare(){
         $user = User::where('is_admin', '=', '1')->first();
         Auth::login($user);
@@ -4916,7 +4916,7 @@ PHP,8,S003294,low,low,Input Validation/Injection,CWE-79,CVE-2023-3142,https://gi
 
         MultilanguageHelpers::setMultilanguageEnabled(0);
         Page::truncate();
-    }",web_security_developer,web_security_developer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+    }",web_security_developer,web_security_developer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 PHP,9,S010782,high,high,Crypto/Trust,CWE-798,CVE-2020-5248,https://github.com/glpi-project/glpi,inc/update.class.php,"   public function doUpdates($current_version = null) {
       if ($current_version === null) {
          if ($this->version === null) {
@@ -5270,7 +5270,7 @@ PHP,9,S010782,high,high,Crypto/Trust,CWE-798,CVE-2020-5248,https://github.com/gl
       $crontask_telemetry->getFromDBbyName(""Telemetry"", ""telemetry"");
       $crontask_telemetry->resetDate();
       $crontask_telemetry->resetState();
-   }",cryptography_engineer,cryptography_engineer|database_security_engineer,Backend / API Development,"[""Database / Persistence"", ""Cloud / DevOps / Platform Engineering""]",qwen2.5-coder:32b
+   }",cryptography_engineer,cryptography_engineer|database_security_engineer,Backend / API Development,"[""Database / Persistence"", ""Security / Application Security""]",qwen2.5-coder:14b
 Python,1,S027879,low,low,Access Control/Auth,CWE-918,CVE-2024-24759,https://github.com/mindsdb/mindsdb,mindsdb/integrations/handlers/openai_handler/helpers.py,"def get_available_models(api_key: str) -> List[str]:
     """"""
     Returns a list of available openai models for the given API key.
@@ -5279,7 +5279,7 @@ Python,1,S027879,low,low,Access Control/Auth,CWE-918,CVE-2024-24759,https://gith
     api_base = os.environ.get('OPENAI_API_BASE', OPENAI_API_BASE)
     res = openai.Model.list(api_key=api_key, api_base=api_base)
 
-    return [models[""id""] for models in res.data]",cryptography_engineer,identity_and_access_engineer|cryptography_engineer|database_security_engineer,Backend / API Development,"[""Security / Application Security"", ""Cloud / DevOps / Platform Engineering""]",qwen2.5-coder:32b
+    return [models[""id""] for models in res.data]",cryptography_engineer,identity_and_access_engineer|cryptography_engineer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 Python,2,S051710,high,high,Concurrency/State,CWE-362,CVE-2019-20384,https://github.com/gentoo/portage,lib/portage/package/ebuild/prepare_build_dirs.py,"def _prepare_workdir(mysettings):
 	workdir_mode = 0o700
 	try:
@@ -5395,7 +5395,7 @@ Python,2,S051710,high,high,Concurrency/State,CWE-362,CVE-2019-20384,https://gith
 				os.unlink(tmpdir_log_path)
 			except OSError:
 				pass
-			os.symlink(mysettings[""PORTAGE_LOG_FILE""], tmpdir_log_path)",cryptography_engineer,concurrent_systems_engineer|web_security_developer|cryptography_engineer|database_security_engineer,Backend / API Development,"[""Security / Application Security"", ""Database / Persistence""]",qwen2.5-coder:32b
+			os.symlink(mysettings[""PORTAGE_LOG_FILE""], tmpdir_log_path)",cryptography_engineer,concurrent_systems_engineer|web_security_developer|cryptography_engineer|database_security_engineer,Backend / API Development,[],qwen2.5-coder:14b
 Python,3,S052165,high,high,Input Validation/Injection,CWE-79,CVE-2020-27783,https://github.com/lxml/lxml,src/lxml/html/clean.py,"    def __call__(self, doc):
         """"""
         Cleans the document.
@@ -5579,7 +5579,7 @@ Python,3,S052165,high,high,Input Validation/Injection,CWE-79,CVE-2020-27783,http
                         rel = '%s nofollow' % rel
                     else:
                         rel = 'nofollow'
-                    el.set('rel', rel)",cryptography_engineer,web_security_developer|cryptography_engineer|database_security_engineer|embedded_security_engineer,General Software Utility,"[""Security / Application Security""]",qwen2.5-coder:32b
+                    el.set('rel', rel)",cryptography_engineer,web_security_developer|cryptography_engineer|database_security_engineer|embedded_security_engineer,Frontend / UI Engineering,"[""Backend / API Development"", ""General Software Utility""]",qwen2.5-coder:14b
 Python,4,S051445,low,mid,Input Validation/Injection,CWE-20,CVE-2020-26890,https://github.com/matrix-org/synapse,synapse/rest/client/v1/room.py,"    async def on_GET(self, request, room_id):
         requester = await self.auth.get_user_by_req(request, allow_guest=True)
         pagination_config = PaginationConfig.from_request(request, default_limit=10)
@@ -5605,7 +5605,7 @@ Python,4,S051445,low,mid,Input Validation/Injection,CWE-20,CVE-2020-26890,https:
             event_filter=event_filter,
         )
 
-        return 200, msgs",database_security_engineer,web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+        return 200, msgs",database_security_engineer,web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 Python,5,S035763,medium,mid,Crypto/Trust,CWE-330,CVE-2017-13082,https://github.com/vanhoefm/krackattacks-test-ap-ft,krackattack/krack-test-client.py,"	def handle_mon_rx(self):
 		p = self.sock_mon.recv()
 		if p == None: return
@@ -5638,7 +5638,7 @@ Python,5,S035763,medium,mid,Crypto/Trust,CWE-330,CVE-2017-13082,https://github.c
 				client.check_pairwise_reinstall(p)
 			if client.is_iv_reused(p):
 				self.handle_replay(p)
-			client.track_used_iv(p)",cryptography_engineer,cryptography_engineer|web_security_developer|embedded_security_engineer,Security / Application Security,"[""Networking / Distributed Systems""]",qwen2.5-coder:32b
+			client.track_used_iv(p)",cryptography_engineer,cryptography_engineer|web_security_developer|embedded_security_engineer,Networking / Distributed Systems,"[""Security / Application Security""]",qwen2.5-coder:14b
 Python,6,S039780,medium,high,Resource/Availability,CWE-400,CVE-2021-21419,https://github.com/eventlet/eventlet,eventlet/websocket.py,"    def _handle_hybi_request(self, environ):
         if 'eventlet.input' in environ:
             sock = environ['eventlet.input'].get_socket()
@@ -5693,7 +5693,7 @@ Python,6,S039780,medium,high,Resource/Availability,CWE-400,CVE-2021-21419,https:
         sock.sendall(b'\r\n'.join(handshake_reply) + b'\r\n\r\n')
         return RFC6455WebSocket(sock, environ, self.protocol_version,
                                 protocol=negotiated_protocol,
-                                extensions=parsed_extensions)",cryptography_engineer,site_reliability_engineer|web_security_developer|cryptography_engineer|network_security_engineer|database_security_engineer,Backend / API Development,"[""Security / Application Security"", ""Cloud / DevOps / Platform Engineering""]",qwen2.5-coder:32b
+                                extensions=parsed_extensions)",cryptography_engineer,site_reliability_engineer|web_security_developer|cryptography_engineer|network_security_engineer|database_security_engineer,Backend / API Development,"[""Networking / Distributed Systems"", ""Security / Application Security""]",qwen2.5-coder:14b
 Python,7,S014901,low,low,Information Exposure,CWE-209,CVE-2023-34110,https://github.com/dpgaspar/Flask-AppBuilder,flask_appbuilder/models/base.py,"    def _get_values(self, lst, list_columns):
         """"""
             Get Values: formats values for list template.
@@ -5710,7 +5710,7 @@ Python,7,S014901,low,low,Information Exposure,CWE-209,CVE-2023-34110,https://git
             for col in list_columns:
                 retdict[col] = self._get_attr_value(item, col)
             retlst.append(retdict)
-        return retlst",cryptography_engineer,privacy_security_engineer|web_security_developer|cryptography_engineer|database_security_engineer,Backend / API Development,"[""General Software Utility""]",qwen2.5-coder:32b
+        return retlst",cryptography_engineer,privacy_security_engineer|web_security_developer|cryptography_engineer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 Python,8,S014346,high,high,Access Control/Auth,CWE-918,CVE-2022-0939,https://github.com/janeczku/calibre-web,cps/editbooks.py,"def edit_book(book_id):
     modif_date = False
 
@@ -5835,7 +5835,7 @@ Python,8,S014346,high,high,Access Control/Auth,CWE-918,CVE-2022-0939,https://git
         log.error_or_exception(ex)
         calibre_db.session.rollback()
         flash(_(""Error editing book, please check logfile for details""), category=""error"")
-        return redirect(url_for('web.show_book', book_id=book.id))",database_security_engineer,identity_and_access_engineer|web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security"", ""Database / Persistence""]",qwen2.5-coder:32b
+        return redirect(url_for('web.show_book', book_id=book.id))",database_security_engineer,identity_and_access_engineer|web_security_developer|database_security_engineer,Backend / API Development,"[""Database / Persistence"", ""Security / Application Security""]",qwen2.5-coder:14b
 Python,9,S048415,medium,high,Memory/Pointer Safety,CWE-119,CVE-2021-41122,https://github.com/vyperlang/vyper,vyper/ast/signatures/function_signature.py,"    def from_definition(
         cls,
         func_ast,
@@ -5901,7 +5901,7 @@ Python,9,S048415,medium,high,Memory/Pointer Safety,CWE-119,CVE-2021-41122,https:
             nonreentrant_key,
             func_ast,
             is_from_json,
-        )",cryptography_engineer,systems_security_engineer|cryptography_engineer|database_security_engineer,General Software Utility,"[""Developer Tooling / Build Systems"", ""Backend / API Development""]",qwen2.5-coder:32b
+        )",cryptography_engineer,systems_security_engineer|cryptography_engineer|database_security_engineer,General Software Utility,[],qwen2.5-coder:14b
 Ruby,1,S010684,medium,high,Resource/Availability,CWE-770,CVE-2023-38684,https://github.com/discourse/discourse,app/controllers/groups_controller.rb,"  def members
     group = find_group(:group_id)
 
@@ -5991,13 +5991,13 @@ Ruby,1,S010684,medium,high,Resource/Availability,CWE-770,CVE-2023-38684,https://
                offset: offset,
              },
            }
-  end",web_security_developer,site_reliability_engineer|web_security_developer,Backend / API Development,"[""Security / Application Security"", ""Database / Persistence""]",qwen2.5-coder:32b
+  end",web_security_developer,site_reliability_engineer|web_security_developer,Backend / API Development,"[""Security / Application Security"", ""Database / Persistence""]",qwen2.5-coder:14b
 Ruby,2,S005797,low,low,Input Validation/Injection,CWE-20,CVE-2015-4410,https://github.com/mongoid/moped,spec/moped/cluster_spec.rb,"          it ""returns a random slave connection"" do
             secondaries = [server]
             cluster.stub(secondaries: secondaries)
             secondaries.should_receive(:sample).and_return(server)
             cluster.socket_for(:read).should eq socket
-          end",network_security_engineer,web_security_developer|network_security_engineer|devsecops_engineer,Database / Persistence,"[""Security / Application Security""]",qwen2.5-coder:32b
+          end",network_security_engineer,web_security_developer|network_security_engineer|devsecops_engineer,Database / Persistence,[],qwen2.5-coder:14b
 Ruby,3,S002611,low,mid,Information Exposure,CWE-200,CVE-2016-7078,https://github.com/theforeman/foreman,test/controllers/auth_source_ldaps_controller_test.rb,"  def test_formats_valid
     AuthSourceLdap.any_instance.stubs(:valid?).returns(false)
     put :update, {:id => AuthSourceLdap.first.id, :format => ""weird"", :auth_source_ldap => {:name => AuthSourceLdap.first.name} }, set_session_user
@@ -6010,7 +6010,7 @@ Ruby,3,S002611,low,mid,Information Exposure,CWE-200,CVE-2016-7078,https://github
     parameterized_id = ""#{AuthSourceLdap.first.id}-#{AuthSourceLdap.first.name.parameterize}""
     put :update, {:id => parameterized_id, :auth_source_ldap => {:name => AuthSourceLdap.first.name} }, set_session_user
     assert_response :success
-  end",database_security_engineer,privacy_security_engineer|web_security_developer|database_security_engineer,Backend / API Development,"[""Database / Persistence"", ""Security / Application Security""]",qwen2.5-coder:32b
+  end",database_security_engineer,privacy_security_engineer|web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 Ruby,4,S010648,high,high,Information Exposure,CWE-200,CVE-2023-23624,https://github.com/discourse/discourse,lib/topic_query.rb,"  def default_results(options = {})
     options.reverse_merge!(@options)
     options.reverse_merge!(per_page: per_page_setting) unless options[:limit] == false
@@ -6212,7 +6212,7 @@ Ruby,4,S010648,high,high,Information Exposure,CWE-200,CVE-2023-23624,https://git
           require_deleted_clause = false
         end
       end
-    end",database_security_engineer,privacy_security_engineer|database_security_engineer,Backend / API Development,"[""Database / Persistence"", ""Security / Application Security""]",qwen2.5-coder:32b
+    end",database_security_engineer,privacy_security_engineer|database_security_engineer,Backend / API Development,"[""Database / Persistence"", ""Security / Application Security""]",qwen2.5-coder:14b
 Ruby,5,S010615,high,high,Access Control/Auth,CWE-863,CVE-2022-39385,https://github.com/discourse/discourse,app/models/invite_redeemer.rb,"  def self.create_user_from_invite(email:, invite:, username: nil, name: nil, password: nil, user_custom_fields: nil, ip_address: nil, session: nil, email_token: nil)
     if username && UsernameValidator.new(username).valid_format? && User.username_available?(username, email)
       available_username = username
@@ -6279,7 +6279,7 @@ Ruby,5,S010615,high,high,Access Control/Auth,CWE-863,CVE-2022-39385,https://gith
     end
 
     User.find(user.id)
-  end",database_security_engineer,identity_and_access_engineer|web_security_developer|database_security_engineer,Backend / API Development,"[""Security / Application Security"", ""Database / Persistence""]",qwen2.5-coder:32b
+  end",database_security_engineer,identity_and_access_engineer|web_security_developer|database_security_engineer,Backend / API Development,"[""Database / Persistence"", ""Security / Application Security""]",qwen2.5-coder:14b
 Ruby,6,S029369,high,high,Resource/Availability,CWE-400,CVE-2018-8777,https://github.com/ruby/ruby,lib/webrick/httpauth/digestauth.rb,"      def _authenticate(req, res)
         unless digest_credentials = check_scheme(req)
           return false
@@ -6404,7 +6404,7 @@ Ruby,6,S029369,high,high,Resource/Availability,CWE-400,CVE-2018-8777,https://git
         info('%s: authentication succeeded.', auth_req['username'])
         req.user = auth_req['username']
         return true
-      end",cryptography_engineer,site_reliability_engineer|web_security_developer|cryptography_engineer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+      end",cryptography_engineer,site_reliability_engineer|web_security_developer|cryptography_engineer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 Ruby,7,S039734,medium,high,Crypto/Trust,CWE-295,CVE-2016-11086,https://github.com/oauth-xx/oauth-ruby,lib/oauth/consumer.rb,"    def create_http(_url = nil)
 
 
@@ -6443,7 +6443,7 @@ Ruby,7,S039734,medium,high,Crypto/Trust,CWE-295,CVE-2016-11086,https://github.co
       http_object.set_debug_output(debug_output) if debug_output
 
       http_object
-    end",cryptography_engineer,cryptography_engineer|web_security_developer,Backend / API Development,"[""Security / Application Security"", ""Networking / Distributed Systems""]",qwen2.5-coder:32b
+    end",cryptography_engineer,cryptography_engineer|web_security_developer,Backend / API Development,"[""Security / Application Security"", ""Networking / Distributed Systems""]",qwen2.5-coder:14b
 Ruby,8,S024154,medium,high,Input Validation/Injection,CWE-22,CVE-2016-0752,https://github.com/rails/rails,actionview/lib/action_view/renderer/template_renderer.rb,"    def determine_template(options)
       keys = options.has_key?(:locals) ? options[:locals].keys : []
 
@@ -6469,7 +6469,7 @@ Ruby,8,S024154,medium,high,Input Validation/Injection,CWE-22,CVE-2016-0752,https
       else
         raise ArgumentError, ""You invoked render but did not give any of :partial, :template, :inline, :file, :plain, :text or :body option.""
       end
-    end",cryptography_engineer,web_security_developer|cryptography_engineer|database_security_engineer,Frontend / UI Engineering,"[""Backend / API Development"", ""Developer Tooling / Build Systems""]",qwen2.5-coder:32b
+    end",cryptography_engineer,web_security_developer|cryptography_engineer|database_security_engineer,Frontend / UI Engineering,"[""Backend / API Development""]",qwen2.5-coder:14b
 Ruby,9,S010561,low,high,Access Control/Auth,CWE-863,CVE-2021-41082,https://github.com/discourse/discourse,app/controllers/topics_controller.rb,"  def private_message_reset_new
     topic_query = TopicQuery.new(current_user, limit: false)
 
@@ -6497,7 +6497,7 @@ Ruby,9,S010561,low,high,Access Control/Auth,CWE-863,CVE-2021-41082,https://githu
     ).perform!
 
     render json: success_json.merge(topic_ids: topic_ids)
-  end",database_security_engineer,identity_and_access_engineer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+  end",database_security_engineer,identity_and_access_engineer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 TypeScript,1,S050341,high,high,Crypto/Trust,CWE-326,CVE-2024-45394,https://github.com/Authenticator-Extension/Authenticator,src/background.ts,"async function getTotp(text: string, silent = false) {
   if (!contentTab || !contentTab.id || !text) {
     return false;
@@ -6659,7 +6659,7 @@ TypeScript,1,S050341,high,high,Crypto/Trust,CWE-326,CVE-2024-45394,https://githu
       }
     }
   }
-}",cryptography_engineer,cryptography_engineer|web_security_developer,Backend / API Development,"[""Security / Application Security"", ""Frontend / UI Engineering""]",qwen2.5-coder:32b
+}",cryptography_engineer,cryptography_engineer|web_security_developer,Backend / API Development,"[""Security / Application Security"", ""Frontend / UI Engineering""]",qwen2.5-coder:14b
 TypeScript,2,S049944,medium,high,Input Validation/Injection,CWE-79,CVE-2021-37596,https://github.com/morethanwords/tweb,src/lib/appManagers/appDocsManager.ts,"    doc.attributes.forEach(attribute => {
       switch(attribute._) {
         case 'documentAttributeFilename':
@@ -6722,14 +6722,14 @@ TypeScript,2,S049944,medium,high,Input Validation/Injection,CWE-79,CVE-2021-3759
 
           doc.animated = true;
           break;
-      }",database_security_engineer,web_security_developer|database_security_engineer,Frontend / UI Engineering,"[""General Software Utility""]",qwen2.5-coder:32b
+      }",database_security_engineer,web_security_developer|database_security_engineer,Frontend / UI Engineering,"[""Backend / API Development""]",qwen2.5-coder:14b
 TypeScript,3,S022584,low,low,Access Control/Auth,CWE-863,CVE-2023-48218,https://github.com/strapi-community/strapi-plugin-protected-populate,server/middlewares/helpers/protect-route.js,"const protectRoute = (query, info) => {
   const savePopulate = protectPopulate(query, info);
   query.populate = savePopulate.populate;
   query.fields = savePopulate.fields;
   query.filters = protectFilters(query.filters, info);
   return query;
-};",database_security_engineer,identity_and_access_engineer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+};",database_security_engineer,identity_and_access_engineer|database_security_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 TypeScript,4,S048945,medium,high,Resource/Availability,CWE-400,CVE-2020-28496,https://github.com/mrdoob/three.js,src/math/Color.js,"	setStyle( style ) {
 
 		function handleAlpha( string ) {
@@ -6845,7 +6845,7 @@ TypeScript,4,S048945,medium,high,Resource/Availability,CWE-400,CVE-2020-28496,ht
 
 		return this;
 
-	}",site_reliability_engineer,site_reliability_engineer,Game / Graphics,"[""General Software Utility""]",qwen2.5-coder:32b
+	}",site_reliability_engineer,site_reliability_engineer,Game / Graphics,"[""Frontend / UI Engineering""]",qwen2.5-coder:14b
 TypeScript,5,S022583,high,high,Access Control/Auth,CWE-863,CVE-2023-48218,https://github.com/strapi-community/strapi-plugin-protected-populate,server/middlewares/helpers/protect-route.js,"const protectPopulate = (populate, info) => {
   let mainBoolean;
   try {
@@ -6963,7 +6963,7 @@ TypeScript,5,S022583,high,high,Access Control/Auth,CWE-863,CVE-2023-48218,https:
     }
   }
   return populate;
-};",cryptography_engineer,identity_and_access_engineer|cryptography_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+};",cryptography_engineer,identity_and_access_engineer|cryptography_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 TypeScript,6,S052957,medium,high,Information Exposure,CWE-532,CVE-2021-32074,https://github.com/hashicorp/vault-action,src/action.js,"async function exportSecrets() {
     const vaultUrl = core.getInput('url', { required: true });
     const vaultNamespace = core.getInput('namespace', { required: false });
@@ -7042,7 +7042,7 @@ TypeScript,6,S052957,medium,high,Information Exposure,CWE-532,CVE-2021-32074,htt
         core.setOutput(request.outputVarName, `${value}`);
         core.debug(`✔ ${request.path} => outputs.${request.outputVarName}${exportEnv ? ` | env.${request.envVarName}` : ''}`);
     }
-};",cryptography_engineer,privacy_security_engineer|web_security_developer|cryptography_engineer,Backend / API Development,"[""Security / Application Security"", ""Cloud / DevOps / Platform Engineering""]",qwen2.5-coder:32b
+};",cryptography_engineer,privacy_security_engineer|web_security_developer|cryptography_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:14b
 TypeScript,7,S013863,high,high,Resource/Availability,CWE-400,CVE-2021-21306,https://github.com/markedjs/marked,src/Lexer.js,"  inlineTokens(src, tokens = [], inLink = false, inRawBlock = false) {
     let token, lastToken;
 
@@ -7199,7 +7199,7 @@ TypeScript,7,S013863,high,high,Resource/Availability,CWE-400,CVE-2021-21306,http
     }
 
     return tokens;
-  }",cryptography_engineer,site_reliability_engineer|cryptography_engineer,Frontend / UI Engineering,"[""General Software Utility"", ""Security / Application Security""]",qwen2.5-coder:32b
+  }",cryptography_engineer,site_reliability_engineer|cryptography_engineer,Frontend / UI Engineering,"[""General Software Utility""]",qwen2.5-coder:14b
 TypeScript,8,S040047,low,mid,Input Validation/Injection,CWE-79,CVE-2014-9716,https://github.com/kogmbh/WebODF,programs/viewer/viewer.js,"    this.initialize = function () {
         var location = String(document.location),
             pos = location.indexOf('#'),
@@ -7248,11 +7248,11 @@ TypeScript,8,S040047,low,mid,Input Validation/Injection,CWE-79,CVE-2014-9716,htt
         };
 
         viewerPlugin.initialize(canvasContainer, location);
-    };",cryptography_engineer,web_security_developer|cryptography_engineer|devsecops_engineer,Frontend / UI Engineering,"[""Security / Application Security""]",qwen2.5-coder:32b
+    };",cryptography_engineer,web_security_developer|cryptography_engineer|devsecops_engineer,Frontend / UI Engineering,"[""Security / Application Security""]",qwen2.5-coder:14b
 TypeScript,9,S011385,low,low,Crypto/Trust,CWE-295,CVE-2019-16281,https://github.com/nayutaco/ptarmigan,ptarmapi/src/ptarmigan/ptarmigan.controller.ts,"    constructor(
         private readonly ptarmiganService: PtarmiganService,
         private readonly bitcoinService: BitcoinService,
         private readonly cacheService: CacheService,
         private readonly invoicesGateway: InvoicesGateway
     ) {
-    }",cryptography_engineer,cryptography_engineer,Backend / API Development,"[""Security / Application Security""]",qwen2.5-coder:32b
+    }",cryptography_engineer,cryptography_engineer,Backend / API Development,"[""Database / Persistence"", ""Security / Application Security""]",qwen2.5-coder:14b

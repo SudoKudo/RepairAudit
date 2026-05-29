@@ -35,6 +35,7 @@ from scripts.participant_kit import build_participant_kit, clean_participant_kit
 from scripts.privacy_check import run_prepublish_check
 
 DEFAULT_METADATA_PATH = Path("data") / "metadata" / "snippet_metadata.csv"
+DEFAULT_KIT_SOURCE_PATH = Path("data") / "datasets" / "classified" / "participant_kit_pool.csv"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Synthetic run generation constants (used by make-test-runs).
@@ -993,12 +994,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_kit = sub.add_parser(
         "build-participant-kit",
-        help="Create a participant-facing kit with locked config and baseline snippets.",
+        help="Create a participant-facing kit from a source CSV and locked study settings.",
     )
     p_kit.add_argument("--participant_id", required=True)
     p_kit.add_argument("--condition", default="security", choices=["productivity", "security"])
     p_kit.add_argument("--phase", default="pilot", choices=["self_test", "pilot", "main"])
-    p_kit.add_argument("--metadata_csv", default=str(DEFAULT_METADATA_PATH))
+    p_kit.add_argument(
+        "--metadata_csv",
+        default=str(DEFAULT_KIT_SOURCE_PATH),
+        help=(
+            "Source CSV for kit generation. Accepts either legacy snippet metadata "
+            "or a classified dataset CSV with expertise and hardness columns."
+        ),
+    )
+    p_kit.add_argument(
+        "--expertise_areas",
+        default="",
+        help="Comma-separated participant expertise areas used for dataset-backed sampling.",
+    )
+    p_kit.add_argument(
+        "--samples_per_hardness",
+        type=int,
+        default=3,
+        help="Number of low, medium, and high samples to include when using a dataset source.",
+    )
+    p_kit.add_argument(
+        "--selection_seed",
+        type=int,
+        default=42,
+        help="Base seed for deterministic dataset sampling.",
+    )
     p_kit.add_argument("--out_root", default="participant_kits")
     p_kit.add_argument("--study_id", default="repairaudit-v1")
     p_kit.add_argument("--llm_provider", default="ollama")

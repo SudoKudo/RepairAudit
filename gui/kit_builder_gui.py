@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Callable
@@ -11,10 +12,37 @@ from tkinter import messagebox, ttk
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+EXPERTISE_AREAS_PATH = REPO_ROOT / "tools" / "domain_classification" / "expertise_areas.jsonl"
+DEFAULT_KIT_SOURCE_PATH = "data/datasets/classified/participant_kit_pool.csv"
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.participant_kit import build_participant_kit  # noqa: E402
+
+
+def _load_expertise_labels(path: Path) -> list[str]:
+    """Read the expertise taxonomy labels used by the classifier and kit sampler."""
+    if not path.exists():
+        raise FileNotFoundError(f"Expertise taxonomy not found: {path}")
+
+    labels: list[str] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, raw_line in enumerate(handle, start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSON in {path} at line {line_number}") from exc
+            label = str(record.get("label", "") or "").strip()
+            if not label:
+                raise ValueError(f"Missing label in {path} at line {line_number}")
+            labels.append(label)
+
+    if not labels:
+        raise ValueError(f"No expertise labels found in {path}")
+    return labels
 
 
 class KitBuilderGUI(tk.Tk):
@@ -44,12 +72,16 @@ class KitBuilderGUI(tk.Tk):
         self.option_add("*Font", "{Segoe UI} 10")
 
         self.out_root_var = tk.StringVar(value="participant_kits")
-        self.metadata_var = tk.StringVar(value="data/metadata/snippet_metadata.csv")
+        self.metadata_var = tk.StringVar(value=DEFAULT_KIT_SOURCE_PATH)
+        self.samples_per_hardness_var = tk.IntVar(value=3)
+        self.selection_seed_var = tk.IntVar(value=42)
         self.condition_var = tk.StringVar(value="security")
         self.phase_var = tk.StringVar(value="pilot")
         self.study_id_var = tk.StringVar(value="repairaudit-v1")
         self.provider_var = tk.StringVar(value="ollama")
         self.model_var = tk.StringVar(value="qwen2.5-coder:7b-instruct")
+        self.expertise_labels = _load_expertise_labels(EXPERTISE_AREAS_PATH)
+        self.expertise_vars = {label: tk.BooleanVar(value=False) for label in self.expertise_labels}
 
         self.base_name_var = tk.StringVar(value="P")
         self.count_var = tk.IntVar(value=1)
@@ -95,7 +127,7 @@ class KitBuilderGUI(tk.Tk):
         root = ttk.Frame(self, style="Root.TFrame", padding=12)
         root.grid(row=0, column=0, sticky="nsew")
         root.columnconfigure(0, weight=1)
-        root.rowconfigure(2, weight=1)
+        root.rowconfigure(3, weight=1)
 
         header_card = tk.Frame(root, bg=self._panel, highlightbackground=self._border, highlightthickness=1, bd=0)
         header_card.grid(row=0, column=0, sticky="ew", pady=(0, 10))
@@ -114,14 +146,49 @@ class KitBuilderGUI(tk.Tk):
         ttk.Label(form, text="Core study settings used for every generated participant kit.", style="Hint.TLabel").grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
         self._row_entry(form, 1, "Output Folder", self.out_root_var, column_offset=0)
         self._row_combo(form, 1, "Condition", self.condition_var, ["security", "productivity"], column_offset=2)
-        self._row_entry(form, 2, "Metadata CSV", self.metadata_var, column_offset=0)
+        self._row_entry(form, 2, "Source CSV", self.metadata_var, column_offset=0)
         self._row_combo(form, 2, "Phase", self.phase_var, ["pilot", "main", "self_test"], column_offset=2)
         self._row_entry(form, 3, "Study ID", self.study_id_var, column_offset=0)
         self._row_entry(form, 3, "LLM Provider", self.provider_var, column_offset=2)
-        self._row_entry(form, 4, "LLM Model", self.model_var, column_offset=0, columnspan=3)
+        self._row_spin_inline(form, 4, "Samples / Hardness", self.samples_per_hardness_var, 1, 10, column_offset=0)
+        self._row_spin_inline(form, 4, "Selection Seed", self.selection_seed_var, 0, 999999, column_offset=2)
+        self._row_entry(form, 5, "LLM Model", self.model_var, column_offset=0, columnspan=3)
+        ttk.Label(
+            form,
+            text="Dataset kits draw 3 low, 3 medium, and 3 high snippets, then backfill within a difficulty bucket if expertise matches run short.",
+            style="Hint.TLabel",
+            wraplength=760,
+            justify="left",
+        ).grid(row=6, column=0, columnspan=4, sticky="w", pady=(6, 0))
+
+        expertise = ttk.LabelFrame(root, text="Expertise Areas", style="Card.TLabelframe", padding=12)
+        expertise.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        expertise.columnconfigure(0, weight=1)
+        expertise.columnconfigure(1, weight=1)
+        ttk.Label(
+            expertise,
+            text="Check the participant's survey-selected expertise areas. Leave all unchecked to sample from the full dataset.",
+            style="Hint.TLabel",
+            wraplength=760,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+
+        expertise_actions = ttk.Frame(expertise, style="Panel.TFrame")
+        expertise_actions.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        ttk.Button(expertise_actions, text="Select All", command=self._select_all_expertise, style="Secondary.TButton").grid(row=0, column=0, padx=(0, 6))
+        ttk.Button(expertise_actions, text="Clear", command=self._clear_expertise, style="Secondary.TButton").grid(row=0, column=1)
+
+        for idx, label in enumerate(self.expertise_labels):
+            row = 2 + (idx // 2)
+            column = idx % 2
+            ttk.Checkbutton(
+                expertise,
+                text=label,
+                variable=self.expertise_vars[label],
+            ).grid(row=row, column=column, sticky="w", pady=2, padx=(0, 12))
 
         naming = ttk.LabelFrame(root, text="Participant Naming", style="Card.TLabelframe", padding=12)
-        naming.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
+        naming.grid(row=3, column=0, sticky="nsew", pady=(8, 0))
         naming.columnconfigure(1, weight=1)
         naming.rowconfigure(7, weight=1)
 
@@ -174,6 +241,26 @@ class KitBuilderGUI(tk.Tk):
         spin = tk.Spinbox(parent, from_=start, to=end, textvariable=var, width=10, command=on_change, bg="#ffffff", relief="solid", bd=1, highlightthickness=0)
         spin.grid(row=row, column=1, sticky="w", pady=5)
         spin.bind("<KeyRelease>", lambda _e: on_change())
+
+    def _row_spin_inline(self, parent: ttk.Frame | ttk.LabelFrame, row: int, label: str, var: tk.IntVar, start: int, end: int, column_offset: int = 0) -> None:
+        """Create one label + spinbox row for compact numeric settings."""
+        ttk.Label(parent, text=label, style="Field.TLabel").grid(row=row, column=column_offset, sticky="w", pady=5, padx=(0, 12))
+        spin = tk.Spinbox(parent, from_=start, to=end, textvariable=var, width=10, bg="#ffffff", relief="solid", bd=1, highlightthickness=0)
+        spin.grid(row=row, column=column_offset + 1, sticky="w", pady=5)
+
+    def _selected_expertise_areas(self) -> list[str]:
+        """Return the expertise labels currently checked in the GUI."""
+        return [label for label in self.expertise_labels if self.expertise_vars[label].get()]
+
+    def _select_all_expertise(self) -> None:
+        """Check every expertise area box."""
+        for var in self.expertise_vars.values():
+            var.set(True)
+
+    def _clear_expertise(self) -> None:
+        """Clear every expertise area box."""
+        for var in self.expertise_vars.values():
+            var.set(False)
 
     def _build_participant_ids(self) -> list[str]:
         """Build participant IDs from base name + count + index settings."""
@@ -232,7 +319,7 @@ class KitBuilderGUI(tk.Tk):
                 raise FileExistsError("The following participant kit IDs already exist.\n\n" f"{listed}\n\n" "Change naming settings or enable overwrite.")
             created: list[str] = []
             for pid in participant_ids:
-                args = argparse.Namespace(participant_id=pid, condition=self.condition_var.get().strip(), phase=self.phase_var.get().strip(), metadata_csv=str(metadata_csv), out_root=str(out_root), study_id=self.study_id_var.get().strip(), llm_provider=self.provider_var.get().strip(), llm_model=self.model_var.get().strip(), temperature=0.2, top_p=0.9, top_k=40, num_predict=1200, seed=42, overwrite=bool(self.overwrite_var.get()))
+                args = argparse.Namespace(participant_id=pid, condition=self.condition_var.get().strip(), phase=self.phase_var.get().strip(), metadata_csv=str(metadata_csv), expertise_areas=", ".join(self._selected_expertise_areas()), samples_per_hardness=int(self.samples_per_hardness_var.get()), selection_seed=int(self.selection_seed_var.get()), out_root=str(out_root), study_id=self.study_id_var.get().strip(), llm_provider=self.provider_var.get().strip(), llm_model=self.model_var.get().strip(), temperature=0.2, top_p=0.9, top_k=40, num_predict=1200, seed=42, overwrite=bool(self.overwrite_var.get()))
                 build_participant_kit(args)
                 created.append(pid)
             messagebox.showinfo("Kits Created", "Created participant kits:\n\n" + "\n".join(created))

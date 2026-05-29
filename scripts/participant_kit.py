@@ -10,11 +10,34 @@ import argparse
 import csv
 import hashlib
 import json
+import random
 import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+HARDNESS_BUCKETS = ("low", "medium", "high")
+HARDNESS_ALIASES = {
+    "low": "low",
+    "med": "medium",
+    "mid": "medium",
+    "medium": "medium",
+    "high": "high",
+}
+LANGUAGE_EXTENSIONS = {
+    "c": ".c",
+    "c#": ".cs",
+    "cpp": ".cpp",
+    "c++": ".cpp",
+    "go": ".go",
+    "java": ".java",
+    "javascript": ".js",
+    "php": ".php",
+    "python": ".py",
+    "ruby": ".rb",
+    "typescript": ".ts",
+}
 
 
 def _participant_timestamp() -> str:
@@ -38,11 +61,170 @@ def _participant_log_fieldnames() -> list[str]:
     ]
 
 
-def _load_snippets(metadata_csv: Path) -> list[dict[str, str]]:
-    """Load valid snippet rows from metadata CSV."""
-    if not metadata_csv.exists():
-        raise FileNotFoundError(f"Missing metadata CSV: {metadata_csv}")
+def _clean_text(value: Any) -> str:
+    """Normalize nullable values into stripped text."""
+    return str(value or "").strip()
 
+
+def _normalize_hardness(value: Any) -> str:
+    """Map dataset hardness text onto the three study buckets."""
+    text = _clean_text(value).casefold()
+    normalized = HARDNESS_ALIASES.get(text)
+    if not normalized:
+        raise ValueError(f"Unsupported hardness_strict value: {value!r}")
+    return normalized
+
+
+def _parse_secondary_expertise(raw_value: Any) -> list[str]:
+    """Parse the serialized secondary expertise list from the dataset."""
+    text = _clean_text(raw_value)
+    if not text:
+        return []
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [_clean_text(item) for item in payload if _clean_text(item)]
+
+
+def _safe_name_fragment(value: str) -> str:
+    """Collapse a filename fragment to alnum, dash, and underscore."""
+    fragment = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in value)
+    return fragment.strip("_")
+
+
+def _dataset_extension(row: dict[str, str]) -> str:
+    """Pick a file extension for a dataset-backed snippet."""
+    file_path = Path(_clean_text(row.get("file_path", "")))
+    if file_path.suffix:
+        return file_path.suffix
+    language = _clean_text(row.get("language", "")).casefold()
+    return LANGUAGE_EXTENSIONS.get(language, ".txt")
+
+
+def _dataset_output_name(row: dict[str, str]) -> str:
+    """Build a stable participant-visible filename for one dataset row."""
+    sample_id = _clean_text(row.get("sample_id", "snippet")) or "snippet"
+    file_name = Path(_clean_text(row.get("file_path", ""))).stem
+    hint = _safe_name_fragment(file_name)[:40]
+    suffix = _dataset_extension(row)
+    if hint:
+        return f"{sample_id}_{hint}{suffix}"
+    return f"{sample_id}{suffix}"
+
+
+def _selection_rng(participant_id: str, selection_seed: int) -> random.Random:
+    """Create a deterministic RNG scoped to one participant kit."""
+    digest = hashlib.sha256(f"{participant_id}:{selection_seed}".encode("utf-8")).hexdigest()
+    return random.Random(int(digest[:16], 16))
+
+
+def _load_dataset_rows(dataset_csv: Path) -> list[dict[str, str]]:
+    """Load dataset rows used for expertise-aware kit generation."""
+    with dataset_csv.open("r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        if not reader.fieldnames:
+            raise ValueError(f"Dataset CSV has no header row: {dataset_csv}")
+
+        required = {
+            "sample_id",
+            "language",
+            "hardness_strict",
+            "code_sample",
+            "primary_expertise_area",
+        }
+        missing = required - set(reader.fieldnames)
+        if missing:
+            raise ValueError(f"Dataset CSV missing required columns: {sorted(missing)}")
+
+        rows: list[dict[str, str]] = []
+        for row in reader:
+            sample_id = _clean_text(row.get("sample_id"))
+            code_sample = _clean_text(row.get("code_sample"))
+            if not sample_id or not code_sample:
+                continue
+
+            normalized_row = {str(key): _clean_text(value) for key, value in row.items()}
+            normalized_row["source_kind"] = "dataset"
+            normalized_row["snippet_id"] = sample_id
+            normalized_row["output_name"] = _dataset_output_name(normalized_row)
+            normalized_row["hardness_bucket"] = _normalize_hardness(normalized_row.get("hardness_strict", ""))
+            normalized_row["secondary_expertise_areas"] = json.dumps(
+                _parse_secondary_expertise(normalized_row.get("secondary_expertise_areas", "")),
+                ensure_ascii=False,
+            )
+            rows.append(normalized_row)
+
+    if not rows:
+        raise ValueError(f"No usable dataset rows found in CSV: {dataset_csv}")
+    return rows
+
+
+def _row_matches_expertise(row: dict[str, str], expertise_labels: set[str]) -> bool:
+    """Return True when the dataset row matches any selected expertise area."""
+    if not expertise_labels:
+        return True
+
+    labels = {_clean_text(row.get("primary_expertise_area", "")).casefold()}
+    labels.update(label.casefold() for label in _parse_secondary_expertise(row.get("secondary_expertise_areas", "")))
+    labels.discard("")
+    return bool(labels & expertise_labels)
+
+
+def _choose_dataset_snippets(
+    *,
+    rows: list[dict[str, str]],
+    expertise_areas: list[str],
+    samples_per_hardness: int,
+    participant_id: str,
+    selection_seed: int,
+) -> list[dict[str, str]]:
+    """Select a balanced 9-snippet kit from the classified dataset."""
+    if samples_per_hardness < 1:
+        raise ValueError("samples_per_hardness must be at least 1.")
+
+    expertise_labels = {label.casefold() for label in expertise_areas if label.strip()}
+    rng = _selection_rng(participant_id, selection_seed)
+    selected: list[dict[str, str]] = []
+
+    for bucket in HARDNESS_BUCKETS:
+        bucket_rows = [row for row in rows if row["hardness_bucket"] == bucket]
+        if len(bucket_rows) < samples_per_hardness:
+            raise ValueError(
+                f"Dataset only has {len(bucket_rows)} {bucket} rows; need {samples_per_hardness}."
+            )
+
+        matching_rows = [row for row in bucket_rows if _row_matches_expertise(row, expertise_labels)]
+        rng.shuffle(matching_rows)
+        chosen = matching_rows[:samples_per_hardness]
+        chosen_ids = {row["snippet_id"] for row in chosen}
+
+        if len(chosen) < samples_per_hardness:
+            fallback_rows = [row for row in bucket_rows if row["snippet_id"] not in chosen_ids]
+            rng.shuffle(fallback_rows)
+            chosen.extend(fallback_rows[: samples_per_hardness - len(chosen)])
+
+        if len(chosen) < samples_per_hardness:
+            raise ValueError(
+                f"Could not assemble {samples_per_hardness} {bucket} snippets for participant {participant_id}."
+            )
+
+        for row in chosen:
+            copied = dict(row)
+            copied["selection_bucket"] = bucket
+            copied["selection_source"] = (
+                "expertise_match" if _row_matches_expertise(row, expertise_labels) else "bucket_fallback"
+            )
+            selected.append(copied)
+
+    rng.shuffle(selected)
+    return selected
+
+
+def _load_metadata_rows(metadata_csv: Path) -> list[dict[str, str]]:
+    """Load valid snippet rows from file-backed metadata CSV."""
     with metadata_csv.open("r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         if not reader.fieldnames:
@@ -55,18 +237,63 @@ def _load_snippets(metadata_csv: Path) -> list[dict[str, str]]:
 
         rows: list[dict[str, str]] = []
         for row in reader:
-            sid = (row.get("snippet_id") or "").strip()
-            base = (row.get("baseline_relpath") or "").strip()
+            sid = _clean_text(row.get("snippet_id"))
+            base = _clean_text(row.get("baseline_relpath"))
             if sid and base:
-                rows.append({"snippet_id": sid, "baseline_relpath": base, "language": (row.get("language") or "").strip()})
+                rows.append(
+                    {
+                        "source_kind": "metadata",
+                        "snippet_id": sid,
+                        "baseline_relpath": base,
+                        "language": _clean_text(row.get("language")),
+                    }
+                )
 
     if not rows:
         raise ValueError(f"No usable rows found in metadata CSV: {metadata_csv}")
     return rows
 
 
+def _load_snippets(
+    source_csv: Path,
+    *,
+    participant_id: str,
+    expertise_areas: list[str],
+    samples_per_hardness: int,
+    selection_seed: int,
+) -> list[dict[str, str]]:
+    """Load either file-backed metadata rows or dataset-backed selection rows."""
+    if not source_csv.exists():
+        raise FileNotFoundError(f"Missing source CSV: {source_csv}")
+
+    with source_csv.open("r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        fieldnames = set(reader.fieldnames or [])
+
+    if {"snippet_id", "baseline_relpath"} <= fieldnames:
+        return _load_metadata_rows(source_csv)
+
+    if {"sample_id", "code_sample", "language", "hardness_strict", "primary_expertise_area"} <= fieldnames:
+        dataset_rows = _load_dataset_rows(source_csv)
+        return _choose_dataset_snippets(
+            rows=dataset_rows,
+            expertise_areas=expertise_areas,
+            samples_per_hardness=samples_per_hardness,
+            participant_id=participant_id,
+            selection_seed=selection_seed,
+        )
+
+    raise ValueError(
+        "Source CSV must either contain snippet_id/baseline_relpath metadata columns "
+        "or sample_id/code_sample/hardness_strict/primary_expertise_area dataset columns."
+    )
+
+
 def _snippet_output_name(row: dict[str, str]) -> str:
     """Return the participant-visible filename for one snippet artifact."""
+    output_name = _clean_text(row.get("output_name"))
+    if output_name:
+        return output_name
     base = Path(row["baseline_relpath"])
     if base.name:
         return base.name
@@ -97,20 +324,32 @@ def _git_head_sha(repo_root: Path) -> str:
         return ""
 
 
-def _write_kit_manifest(*, kit_dir: Path, metadata_csv: Path, lock_payload: dict[str, Any], snippet_files: dict[str, str]) -> None:
+def _write_kit_manifest(*, kit_dir: Path, source_csv: Path, lock_payload: dict[str, Any], snippet_files: dict[str, str]) -> None:
     """Write a local reproducibility manifest without participant results or logs."""
     repo_root = Path(__file__).resolve().parents[1]
     config_path = repo_root / "config.yaml"
     manifest = {
         "generated_utc": _participant_timestamp(),
         "repo_commit": _git_head_sha(repo_root),
-        "metadata_csv": str(metadata_csv),
-        "metadata_sha256": _sha256_file(metadata_csv) if metadata_csv.exists() else "",
+        "source_csv": str(source_csv),
+        "source_csv_sha256": _sha256_file(source_csv) if source_csv.exists() else "",
         "config_yaml_sha256": _sha256_file(config_path) if config_path.exists() else "",
         "study_config_lock_sha256": _sha256_text(json.dumps(lock_payload, sort_keys=True)),
         "snippet_files": snippet_files,
     }
     (kit_dir / "kit_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def _write_selected_snippet_source(path: Path, rows: list[dict[str, str]]) -> None:
+    """Write the selected snippet rows into the run folder for later replay."""
+    if not rows:
+        return
+    fieldnames = sorted({key for row in rows for key in row.keys()})
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in fieldnames})
 
 
 def _write_participant_log_template(log_csv: Path, snippet_ids: list[str], model_name: str) -> None:
@@ -169,6 +408,22 @@ def _write_participant_profile_template(profile_path: Path) -> None:
         encoding="utf-8",
     )
 
+
+def _parse_expertise_args(value: Any) -> list[str]:
+    """Parse a comma-separated expertise list from CLI or GUI input."""
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for raw_piece in _clean_text(value).replace(";", ",").split(","):
+        label = " ".join(raw_piece.split())
+        if not label:
+            continue
+        key = label.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(label)
+    return ordered
+
 def _write_participant_readme(
     *,
     path: Path,
@@ -177,8 +432,12 @@ def _write_participant_readme(
     phase: str,
     model_name: str,
     run_dir_name: str,
+    expertise_areas: list[str],
 ) -> None:
     """Write short launch/troubleshooting instructions for participants."""
+    expertise_lines = ""
+    if expertise_areas:
+        expertise_lines = f"- Assigned expertise areas: `{', '.join(expertise_areas)}`\n"
     content = f"""# RepairAudit Participant Kit
 
 Use the RepairAudit participant app for all study instructions and task steps. This README is only for launch and troubleshooting.
@@ -203,6 +462,7 @@ Use the RepairAudit participant app for all study instructions and task steps. T
 - Condition: `{condition}`
 - Phase: `{phase}`
 - Assigned model: `{model_name}`
+{expertise_lines}
 
 ## 4) In-App Workflow
 - Complete the participant profile in the app.
@@ -530,9 +790,21 @@ fi
     (kit_dir / "Launch_Study_Web_App.sh").write_text(launcher_sh, encoding="utf-8")
 def build_participant_kit(args: argparse.Namespace) -> None:
     """Build a locked participant kit with baseline snippets and submission helpers."""
-    snippets = _load_snippets(Path(args.metadata_csv))
+    source_csv = Path(args.metadata_csv)
+    expertise_areas = _parse_expertise_args(getattr(args, "expertise_areas", ""))
+    samples_per_hardness = int(getattr(args, "samples_per_hardness", 3))
+    selection_seed = int(getattr(args, "selection_seed", 42))
+
+    snippets = _load_snippets(
+        source_csv,
+        participant_id=args.participant_id,
+        expertise_areas=expertise_areas,
+        samples_per_hardness=samples_per_hardness,
+        selection_seed=selection_seed,
+    )
     snippet_ids = [row["snippet_id"] for row in snippets]
     snippet_files = {row["snippet_id"]: _snippet_output_name(row) for row in snippets}
+    source_kind = _clean_text(snippets[0].get("source_kind", "metadata")) or "metadata"
 
     out_root = Path(args.out_root)
     kit_dir = out_root / args.participant_id
@@ -554,15 +826,39 @@ def build_participant_kit(args: argparse.Namespace) -> None:
 
     for row in snippets:
         sid = row["snippet_id"]
-        src = Path(row["baseline_relpath"])
-        if not src.exists():
-            raise FileNotFoundError(f"Missing baseline snippet: {src}")
         output_name = snippet_files[sid]
         # Keep the editable answer file intentionally blank at start.
         (run_dir / "edits" / output_name).write_text("", encoding="utf-8")
-        shutil.copy2(src, run_dir / "baseline" / output_name)
+        if source_kind == "dataset":
+            (run_dir / "baseline" / output_name).write_text(
+                _clean_text(row.get("code_sample", "")),
+                encoding="utf-8",
+            )
+        else:
+            src = Path(row["baseline_relpath"])
+            if not src.exists():
+                raise FileNotFoundError(f"Missing baseline snippet: {src}")
+            shutil.copy2(src, run_dir / "baseline" / output_name)
 
     (run_dir / "condition.txt").write_text(args.condition.strip() + "\n", encoding="utf-8")
+    _write_selected_snippet_source(run_dir / "snippet_source.csv", snippets)
+    (run_dir / "study_assignment.json").write_text(
+        json.dumps(
+            {
+                "generated_utc": _participant_timestamp(),
+                "participant_id": args.participant_id,
+                "condition": args.condition,
+                "phase": args.phase,
+                "source_kind": source_kind,
+                "source_csv": str(source_csv),
+                "expertise_areas": expertise_areas,
+                "samples_per_hardness": samples_per_hardness,
+                "selection_seed": selection_seed,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     (run_dir / "start_end_times.json").write_text(
         json.dumps(
             {
@@ -598,6 +894,13 @@ def build_participant_kit(args: argparse.Namespace) -> None:
         "generated_utc": _participant_timestamp(),
         "snippet_ids": snippet_ids,
         "snippet_files": snippet_files,
+        "snippet_source": {
+            "kind": source_kind,
+            "csv": str(source_csv),
+            "expertise_areas": expertise_areas,
+            "samples_per_hardness": samples_per_hardness,
+            "selection_seed": selection_seed,
+        },
         "llm": {
             "provider": args.llm_provider,
             "model": args.llm_model,
@@ -616,7 +919,7 @@ def build_participant_kit(args: argparse.Namespace) -> None:
     (kit_dir / "study_config.lock.json").write_text(json.dumps(locked_config, indent=2), encoding="utf-8")
     _write_kit_manifest(
         kit_dir=kit_dir,
-        metadata_csv=Path(args.metadata_csv),
+        source_csv=source_csv,
         lock_payload=locked_config,
         snippet_files=snippet_files,
     )
@@ -628,6 +931,7 @@ def build_participant_kit(args: argparse.Namespace) -> None:
         phase=args.phase,
         model_name=args.llm_model,
         run_dir_name=run_dir_name,
+        expertise_areas=expertise_areas,
     )
     _write_submission_packager(
         path=kit_dir / "package_submission.py",

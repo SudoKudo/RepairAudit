@@ -13,10 +13,9 @@ from __future__ import annotations
 
 import argparse
 import csv
-import sys
-csv.field_size_limit(sys.maxsize)
 import json
 import logging
+import sys
 from json import JSONDecodeError, JSONDecoder
 from pathlib import Path
 from typing import Any
@@ -24,6 +23,13 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import pandas as pd
+
+# Some code_sample fields exceed the default 131 072-byte CSV field limit.
+# sys.maxsize overflows on 32-bit C longs (Windows), so fall back to 2 GiB.
+try:
+    csv.field_size_limit(sys.maxsize)
+except OverflowError:
+    csv.field_size_limit(2**31 - 1)
 
 MAX_ATTEMPTS = 3
 MAX_SECONDARY_EXPERTISE_AREAS = 10
@@ -352,7 +358,7 @@ def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Pa
     discarded_rows = 0
     i = 0
 
-    for chunk in pd.read_csv(input_csv, chunksize=chunk_size):
+    for chunk in pd.read_csv(input_csv, chunksize=chunk_size, engine="python"):
         for raw_row in chunk.to_dict(orient="records"):
             i += 1
             row = _string_keyed_row(raw_row)

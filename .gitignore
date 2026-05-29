@@ -64,3 +64,8 @@ _*.py
 bandit.json
 semgrep.json
 
+tools/domain_classification/dataset.csv
+
+# Large local datasets
+/tools/domain_classification/dataset.csv
+/tools/domain_classification/dataset_classified.csv

@@ -39,6 +39,8 @@ class _ClassifyModule(Protocol):
         model: str,
     ) -> dict[str, Any]: ...
 
+    def _default_output_csv(self, input_csv: Path) -> Path: ...
+
     def _call_ollama(
         self,
         model: str,
@@ -170,8 +172,8 @@ class ExpertiseClassificationTests(unittest.TestCase):
     def test_main_appends_expertise_columns_to_output_csv(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
-            input_csv = tmp_path / "draft(in).csv"
-            output_csv = tmp_path / "draft(out).csv"
+            input_csv = tmp_path / "input_dataset.csv"
+            output_csv = tmp_path / "classified_dataset.csv"
 
             pd.DataFrame(
                 [
@@ -219,6 +221,12 @@ class ExpertiseClassificationTests(unittest.TestCase):
             self.assertEqual(result.loc[0, "expertise_classifier_model"], "mock-model")
             self.assertIn("primary_job", result.columns)
             self.assertIn("jobs", result.columns)
+
+    def test_default_output_csv_uses_classified_sibling_for_raw_dataset_tree(self) -> None:
+        raw_csv = Path("C:/repo/data/datasets/raw/example_source.csv")
+        expected = Path("C:/repo/data/datasets/classified/example.csv")
+
+        self.assertEqual(domain_classify._default_output_csv(raw_csv), expected)
 
     def test_system_prompt_declares_exact_output_schema(self) -> None:
         prompt = domain_classify.SYSTEM_PROMPT

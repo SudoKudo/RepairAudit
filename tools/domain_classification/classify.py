@@ -26,6 +26,13 @@ import pandas as pd
 MAX_ATTEMPTS = 3
 MAX_SECONDARY_EXPERTISE_AREAS = 10
 OLLAMA_URL = "http://localhost:11434/api/chat"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_RAW_DATASET_PATH = (
+    REPO_ROOT / "data" / "datasets" / "raw" / "participant_kit_pool_source.csv"
+)
+DEFAULT_CLASSIFIED_DATASET_PATH = (
+    REPO_ROOT / "data" / "datasets" / "classified" / "participant_kit_pool.csv"
+)
 EXPERTISE_AREAS_PATH = Path(__file__).with_name("expertise_areas.jsonl")
 
 logger = logging.getLogger(__name__)
@@ -304,6 +311,25 @@ def _string_keyed_row(row: dict[Any, Any]) -> dict[str, Any]:
     return {str(key): value for key, value in row.items()}
 
 
+def _default_output_csv(input_csv: Path) -> Path:
+    """Choose the standard classified dataset path for known raw-dataset inputs."""
+    resolved_input = input_csv.resolve()
+    if resolved_input == DEFAULT_RAW_DATASET_PATH.resolve():
+        return DEFAULT_CLASSIFIED_DATASET_PATH
+
+    if (
+        resolved_input.parent.name == "raw"
+        and resolved_input.parent.parent.name == "datasets"
+    ):
+        output_dir = resolved_input.parent.parent / "classified"
+        output_name = resolved_input.name
+        if output_name.endswith("_source.csv"):
+            output_name = output_name.replace("_source.csv", ".csv")
+        return output_dir / output_name
+
+    return resolved_input.with_name(f"{resolved_input.stem}_classified.csv")
+
+
 def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Path, chunk_size: int) -> None:
     """Run expertise classification for one input CSV."""
     with input_csv.open("r", encoding="utf-8", newline="") as fh:
@@ -397,12 +423,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--input",
-        required=True,
-        help="Path to the input CSV file",
+        default=str(DEFAULT_RAW_DATASET_PATH),
+        help="Path to the input CSV file. Defaults to the raw dataset source under data/datasets/raw.",
     )
     parser.add_argument(
         "--output",
-        help="Optional output CSV path. Defaults to draft(out).csv beside the input.",
+        help="Optional output CSV path. Defaults to the canonical classified dataset path.",
     )
     parser.add_argument(
         "--model",
@@ -434,7 +460,7 @@ if __name__ == "__main__":
     if args.output:
         output_csv = Path(args.output).resolve()
     else:
-        output_csv = input_csv.parent / "draft(out).csv"
+        output_csv = _default_output_csv(input_csv)
 
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     _configure_logging(output_csv.parent / "classify.log")

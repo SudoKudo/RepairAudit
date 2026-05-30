@@ -319,6 +319,20 @@ def _string_keyed_row(row: dict[Any, Any]) -> dict[str, Any]:
     return {str(key): value for key, value in row.items()}
 
 
+def _iter_csv_chunks(path: Path, chunk_size: int):
+    """Yield lists of row dicts from a CSV without loading the file into memory."""
+    with path.open("r", encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh)
+        chunk: list[dict[str, Any]] = []
+        for row in reader:
+            chunk.append(dict(row))
+            if len(chunk) == chunk_size:
+                yield chunk
+                chunk = []
+        if chunk:
+            yield chunk
+
+
 def _default_output_csv(input_csv: Path) -> Path:
     """Choose the standard classified dataset path for known raw-dataset inputs."""
     resolved_input = input_csv.resolve()
@@ -338,7 +352,7 @@ def _default_output_csv(input_csv: Path) -> Path:
     return resolved_input.with_name(f"{resolved_input.stem}_classified.csv")
 
 
-def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Path, chunk_size: int) -> None:
+def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Path, chunk_size: int, dry_run: bool = False) -> None:
     """Run expertise classification for one input CSV."""
     with input_csv.open("r", encoding="utf-8", newline="") as fh:
         reader = csv.reader(fh)
@@ -358,8 +372,8 @@ def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Pa
     discarded_rows = 0
     i = 0
 
-    for chunk in pd.read_csv(input_csv, chunksize=chunk_size, engine="python"):
-        for raw_row in chunk.to_dict(orient="records"):
+    for chunk in _iter_csv_chunks(input_csv, chunk_size):
+        for raw_row in chunk:
             i += 1
             row = _string_keyed_row(raw_row)
             sample_id = _clean_text(row.get("sample_id", ""))
@@ -388,31 +402,35 @@ def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Pa
                 {"role": "user", "content": user_content},
             ]
 
-            classification: dict[str, Any] | None = None
-            for attempt in range(1, MAX_ATTEMPTS + 1):
-                try:
-                    response_text = _call_ollama(model, messages, stream=stream)
-                except Exception as exc:
-                    logger.warning("[%s] attempt %s: Ollama request failed: %s", sample_id, attempt, exc)
-                    continue
-
-                extracted = _extract_first_json_object(response_text)
-                if extracted is None:
-                    logger.warning("[%s] attempt %s: could not extract a JSON object", sample_id, attempt)
-                    continue
-
-                classification, reason = _validate_classification(extracted)
-                if classification is not None:
-                    break
-
-                logger.warning("[%s] attempt %s: invalid classification payload: %s", sample_id, attempt, reason)
-
-            if classification is None:
-                logger.warning("[%s] discarded after %s attempts", sample_id, MAX_ATTEMPTS)
-                classification = {"primary_expertise_area": "", "secondary_expertise_areas": []}
-                discarded_rows += 1
-            else:
+            if dry_run:
+                classification = {"primary_expertise_area": EXPERTISE_CATALOG[0]["label"], "secondary_expertise_areas": []}
                 classified_rows += 1
+            else:
+                classification = None
+                for attempt in range(1, MAX_ATTEMPTS + 1):
+                    try:
+                        response_text = _call_ollama(model, messages, stream=stream)
+                    except Exception as exc:
+                        logger.warning("[%s] attempt %s: Ollama request failed: %s", sample_id, attempt, exc)
+                        continue
+
+                    extracted = _extract_first_json_object(response_text)
+                    if extracted is None:
+                        logger.warning("[%s] attempt %s: could not extract a JSON object", sample_id, attempt)
+                        continue
+
+                    classification, reason = _validate_classification(extracted)
+                    if classification is not None:
+                        break
+
+                    logger.warning("[%s] attempt %s: invalid classification payload: %s", sample_id, attempt, reason)
+
+                if classification is None:
+                    logger.warning("[%s] discarded after %s attempts", sample_id, MAX_ATTEMPTS)
+                    classification = {"primary_expertise_area": "", "secondary_expertise_areas": []}
+                    discarded_rows += 1
+                else:
+                    classified_rows += 1
 
             result = pd.DataFrame([_build_output_row(row, classification, model)])
             result.to_csv(output_csv, mode="a", header=not output_csv.exists(), index=False)
@@ -442,6 +460,11 @@ if __name__ == "__main__":
         "--model",
         required=True,
         help="Ollama model name (for example, qwen2.5-coder:14b)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Skip Ollama calls and write placeholder classifications — use to verify chunking without a live model",
     )
     parser.add_argument(
         "--no-stream",
@@ -482,4 +505,5 @@ if __name__ == "__main__":
         input_csv=input_csv,
         output_csv=output_csv,
         chunk_size=args.chunk_size,
+        dry_run=args.dry_run,
     )

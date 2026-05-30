@@ -122,7 +122,7 @@ def _clean_text(value: Any) -> str:
     return str(value).strip()
 
 
-def _configure_logging(log_path: Path) -> None:
+def _configure_logging(log_path: Path) -> logging.Logger:
     """Configure console and file logging for one classification run."""
     logging.basicConfig(
         level=logging.INFO,
@@ -132,6 +132,14 @@ def _configure_logging(log_path: Path) -> None:
             logging.FileHandler(log_path, mode="a", encoding="utf-8"),
         ],
     )
+    error_logger = logging.getLogger("row_errors")
+    error_logger.setLevel(logging.ERROR)
+    error_handler = logging.FileHandler(
+        log_path.with_name("errors.log"), mode="a", encoding="utf-8"
+    )
+    error_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    error_logger.addHandler(error_handler)
+    return error_logger
 
 
 def _build_user_message(
@@ -290,12 +298,13 @@ def _read_completed_ids(output_csv: Path) -> set[str]:
     if not output_csv.exists():
         return set()
     try:
-        existing = pd.read_csv(output_csv)
-    except pd.errors.EmptyDataError:
+        with output_csv.open("r", encoding="utf-8", newline="") as fh:
+            reader = csv.DictReader(fh)
+            if not reader.fieldnames or "sample_id" not in reader.fieldnames:
+                return set()
+            return {v for row in reader if (v := _clean_text(row.get("sample_id", "")))}
+    except Exception:
         return set()
-    if "sample_id" not in existing.columns:
-        return set()
-    return {value for value in (_clean_text(item) for item in existing["sample_id"]) if value}
 
 
 def _build_output_row(
@@ -352,7 +361,7 @@ def _default_output_csv(input_csv: Path) -> Path:
     return resolved_input.with_name(f"{resolved_input.stem}_classified.csv")
 
 
-def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Path, chunk_size: int, dry_run: bool = False) -> None:
+def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Path, chunk_size: int, dry_run: bool = False, error_logger: logging.Logger | None = None) -> None:
     """Run expertise classification for one input CSV."""
     with input_csv.open("r", encoding="utf-8", newline="") as fh:
         reader = csv.reader(fh)
@@ -370,6 +379,7 @@ def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Pa
 
     classified_rows = 0
     discarded_rows = 0
+    skipped_rows = 0
     i = 0
 
     for chunk in _iter_csv_chunks(input_csv, chunk_size):
@@ -380,65 +390,73 @@ def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Pa
             if resume and sample_id in completed:
                 continue
 
-            language = _clean_text(row.get("language", ""))
-            cwe_primary = _clean_text(row.get("cwe_primary", ""))
-            vulnerability_type = _clean_text(row.get("vulnerability_type", ""))
-            source_project = _clean_text(row.get("source_project", ""))
-            file_path = _clean_text(row.get("file_path", ""))
-            code_sample = _clean_text(row.get("code_sample", ""))
+            try:
+                language = _clean_text(row.get("language", ""))
+                cwe_primary = _clean_text(row.get("cwe_primary", ""))
+                vulnerability_type = _clean_text(row.get("vulnerability_type", ""))
+                source_project = _clean_text(row.get("source_project", ""))
+                file_path = _clean_text(row.get("file_path", ""))
+                code_sample = _clean_text(row.get("code_sample", ""))
 
-            logger.info("[%s/%s] %s (%s, %s)", i, total_rows, sample_id, language, cwe_primary)
+                logger.info("[%s/%s] %s (%s, %s)", i, total_rows, sample_id, language, cwe_primary)
 
-            user_content = _build_user_message(
-                project=source_project,
-                file_path=file_path,
-                language=language,
-                vulnerability_type=vulnerability_type,
-                cwe_primary=cwe_primary,
-                code_sample=code_sample,
-            )
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ]
+                user_content = _build_user_message(
+                    project=source_project,
+                    file_path=file_path,
+                    language=language,
+                    vulnerability_type=vulnerability_type,
+                    cwe_primary=cwe_primary,
+                    code_sample=code_sample,
+                )
+                messages = [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ]
 
-            if dry_run:
-                classification = {"primary_expertise_area": EXPERTISE_CATALOG[0]["label"], "secondary_expertise_areas": []}
-                classified_rows += 1
-            else:
-                classification = None
-                for attempt in range(1, MAX_ATTEMPTS + 1):
-                    try:
-                        response_text = _call_ollama(model, messages, stream=stream)
-                    except Exception as exc:
-                        logger.warning("[%s] attempt %s: Ollama request failed: %s", sample_id, attempt, exc)
-                        continue
-
-                    extracted = _extract_first_json_object(response_text)
-                    if extracted is None:
-                        logger.warning("[%s] attempt %s: could not extract a JSON object", sample_id, attempt)
-                        continue
-
-                    classification, reason = _validate_classification(extracted)
-                    if classification is not None:
-                        break
-
-                    logger.warning("[%s] attempt %s: invalid classification payload: %s", sample_id, attempt, reason)
-
-                if classification is None:
-                    logger.warning("[%s] discarded after %s attempts", sample_id, MAX_ATTEMPTS)
-                    classification = {"primary_expertise_area": "", "secondary_expertise_areas": []}
-                    discarded_rows += 1
-                else:
+                if dry_run:
+                    classification = {"primary_expertise_area": EXPERTISE_CATALOG[0]["label"], "secondary_expertise_areas": []}
                     classified_rows += 1
+                else:
+                    classification = None
+                    for attempt in range(1, MAX_ATTEMPTS + 1):
+                        try:
+                            response_text = _call_ollama(model, messages, stream=stream)
+                        except Exception as exc:
+                            logger.warning("[%s] attempt %s: Ollama request failed: %s", sample_id, attempt, exc)
+                            continue
 
-            result = pd.DataFrame([_build_output_row(row, classification, model)])
-            result.to_csv(output_csv, mode="a", header=not output_csv.exists(), index=False)
+                        extracted = _extract_first_json_object(response_text)
+                        if extracted is None:
+                            logger.warning("[%s] attempt %s: could not extract a JSON object", sample_id, attempt)
+                            continue
+
+                        classification, reason = _validate_classification(extracted)
+                        if classification is not None:
+                            break
+
+                        logger.warning("[%s] attempt %s: invalid classification payload: %s", sample_id, attempt, reason)
+
+                    if classification is None:
+                        logger.warning("[%s] discarded after %s attempts", sample_id, MAX_ATTEMPTS)
+                        classification = {"primary_expertise_area": "", "secondary_expertise_areas": []}
+                        discarded_rows += 1
+                    else:
+                        classified_rows += 1
+
+                result = pd.DataFrame([_build_output_row(row, classification, model)])
+                result.to_csv(output_csv, mode="a", header=not output_csv.exists(), index=False)
+
+            except Exception as exc:
+                skipped_rows += 1
+                logger.warning("[%s/%s] skipped row %s due to error: %s", i, total_rows, sample_id, exc)
+                if error_logger:
+                    error_logger.error("row=%s sample_id=%s error=%s", i, sample_id, exc)
 
     logger.info(
-        "Done. classified=%s discarded=%s total=%s",
+        "Done. classified=%s discarded=%s skipped=%s total=%s",
         classified_rows,
         discarded_rows,
+        skipped_rows,
         total_rows,
     )
 
@@ -494,7 +512,7 @@ if __name__ == "__main__":
         output_csv = _default_output_csv(input_csv)
 
     output_csv.parent.mkdir(parents=True, exist_ok=True)
-    _configure_logging(output_csv.parent / "classify.log")
+    error_logger = _configure_logging(output_csv.parent / "classify.log")
     logger.info("Input:  %s", input_csv)
     logger.info("Output: %s", output_csv)
 
@@ -506,4 +524,5 @@ if __name__ == "__main__":
         output_csv=output_csv,
         chunk_size=args.chunk_size,
         dry_run=args.dry_run,
+        error_logger=error_logger,
     )

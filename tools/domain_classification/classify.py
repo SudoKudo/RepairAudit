@@ -328,6 +328,22 @@ def _string_keyed_row(row: dict[Any, Any]) -> dict[str, Any]:
     return {str(key): value for key, value in row.items()}
 
 
+def _append_skipped_row(skipped_csv: Path, row: dict[str, Any], reason: str) -> None:
+    """Append one raw input row to the skipped-rows CSV with an error reason."""
+    out_row = dict(row)
+    out_row["error"] = reason
+    # Ensure keys are stable strings
+    out_row = _string_keyed_row(out_row)
+
+    write_header = not skipped_csv.exists()
+    skipped_csv.parent.mkdir(parents=True, exist_ok=True)
+    with skipped_csv.open("a", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(out_row.keys()))
+        if write_header:
+            writer.writeheader()
+        writer.writerow({k: ("" if v is None else v) for k, v in out_row.items()})
+
+
 def _iter_csv_chunks(path: Path, chunk_size: int):
     """Yield lists of row dicts from a CSV without loading the file into memory."""
     with path.open("r", encoding="utf-8", newline="") as fh:
@@ -363,6 +379,7 @@ def _default_output_csv(input_csv: Path) -> Path:
 
 def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Path, chunk_size: int, dry_run: bool = False, error_logger: logging.Logger | None = None) -> None:
     """Run expertise classification for one input CSV."""
+    skipped_csv = output_csv.with_name(f"{output_csv.stem}_skipped.csv")
     with input_csv.open("r", encoding="utf-8", newline="") as fh:
         reader = csv.reader(fh)
         next(reader)  # skip header
@@ -418,9 +435,18 @@ def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Pa
                     classified_rows += 1
                 else:
                     classification = None
+                    skip_this_sample = False
                     for attempt in range(1, MAX_ATTEMPTS + 1):
                         try:
                             response_text = _call_ollama(model, messages, stream=stream)
+                        except KeyboardInterrupt:
+                            # Treat an interrupt during a sample as a skip for that sample.
+                            reason = "interrupted (KeyboardInterrupt)"
+                            logger.warning("[%s] attempt %s: %s - skipping sample", sample_id, attempt, reason)
+                            _append_skipped_row(skipped_csv, row, reason)
+                            skipped_rows += 1
+                            skip_this_sample = True
+                            break
                         except Exception as exc:
                             logger.warning("[%s] attempt %s: Ollama request failed: %s", sample_id, attempt, exc)
                             continue
@@ -436,10 +462,16 @@ def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Pa
 
                         logger.warning("[%s] attempt %s: invalid classification payload: %s", sample_id, attempt, reason)
 
+                    if skip_this_sample:
+                        # move on to next row without writing an output classification
+                        continue
+
                     if classification is None:
-                        logger.warning("[%s] discarded after %s attempts", sample_id, MAX_ATTEMPTS)
-                        classification = {"primary_expertise_area": "", "secondary_expertise_areas": []}
-                        discarded_rows += 1
+                        reason = f"discarded after {MAX_ATTEMPTS} attempts"
+                        logger.warning("[%s] %s", sample_id, reason)
+                        _append_skipped_row(skipped_csv, row, reason)
+                        skipped_rows += 1
+                        continue
                     else:
                         classified_rows += 1
 
@@ -448,7 +480,9 @@ def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Pa
 
             except Exception as exc:
                 skipped_rows += 1
+                reason = f"error: {exc}"
                 logger.warning("[%s/%s] skipped row %s due to error: %s", i, total_rows, sample_id, exc)
+                _append_skipped_row(skipped_csv, row, reason)
                 if error_logger:
                     error_logger.error("row=%s sample_id=%s error=%s", i, sample_id, exc)
 

@@ -34,13 +34,6 @@ except OverflowError:
 MAX_ATTEMPTS = 3
 MAX_SECONDARY_EXPERTISE_AREAS = 10
 OLLAMA_URL = "http://localhost:11434/api/chat"
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_RAW_DATASET_PATH = (
-    REPO_ROOT / "data" / "datasets" / "raw" / "participant_kit_pool_source.csv"
-)
-DEFAULT_CLASSIFIED_DATASET_PATH = (
-    REPO_ROOT / "data" / "datasets" / "classified" / "participant_kit_pool.csv"
-)
 EXPERTISE_AREAS_PATH = Path(__file__).with_name("expertise_areas.jsonl")
 
 logger = logging.getLogger(__name__)
@@ -120,6 +113,15 @@ def _clean_text(value: Any) -> str:
     if pd.isna(value):
         return ""
     return str(value).strip()
+
+
+def _row_identifier(row: dict[str, Any]) -> str:
+    """Return the stable row identifier used for resume and logging."""
+    for key in ("sample_id", "row_uid", "source_row_id"):
+        value = _clean_text(row.get(key, ""))
+        if value:
+            return value
+    return ""
 
 
 def _configure_logging(log_path: Path) -> logging.Logger:
@@ -300,9 +302,9 @@ def _read_completed_ids(output_csv: Path) -> set[str]:
     try:
         with output_csv.open("r", encoding="utf-8", newline="") as fh:
             reader = csv.DictReader(fh)
-            if not reader.fieldnames or "sample_id" not in reader.fieldnames:
+            if not reader.fieldnames:
                 return set()
-            return {v for row in reader if (v := _clean_text(row.get("sample_id", "")))}
+            return {v for row in reader if (v := _row_identifier(row))}
     except Exception:
         return set()
 
@@ -359,11 +361,8 @@ def _iter_csv_chunks(path: Path, chunk_size: int):
 
 
 def _default_output_csv(input_csv: Path) -> Path:
-    """Choose the standard classified dataset path for known raw-dataset inputs."""
+    """Choose a default classified output path based on the input location."""
     resolved_input = input_csv.resolve()
-    if resolved_input == DEFAULT_RAW_DATASET_PATH.resolve():
-        return DEFAULT_CLASSIFIED_DATASET_PATH
-
     if (
         resolved_input.parent.name == "raw"
         and resolved_input.parent.parent.name == "datasets"
@@ -403,8 +402,8 @@ def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Pa
         for raw_row in chunk:
             i += 1
             row = _string_keyed_row(raw_row)
-            sample_id = _clean_text(row.get("sample_id", ""))
-            if resume and sample_id in completed:
+            row_id = _row_identifier(row)
+            if resume and row_id in completed:
                 continue
 
             try:
@@ -415,7 +414,7 @@ def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Pa
                 file_path = _clean_text(row.get("file_path", ""))
                 code_sample = _clean_text(row.get("code_sample", ""))
 
-                logger.info("[%s/%s] %s (%s, %s)", i, total_rows, sample_id, language, cwe_primary)
+                logger.info("[%s/%s] %s (%s, %s)", i, total_rows, row_id or "<no-id>", language, cwe_primary)
 
                 user_content = _build_user_message(
                     project=source_project,
@@ -442,25 +441,25 @@ def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Pa
                         except KeyboardInterrupt:
                             # Treat an interrupt during a sample as a skip for that sample.
                             reason = "interrupted (KeyboardInterrupt)"
-                            logger.warning("[%s] attempt %s: %s - skipping sample", sample_id, attempt, reason)
+                            logger.warning("[%s] attempt %s: %s - skipping sample", row_id or "<no-id>", attempt, reason)
                             _append_skipped_row(skipped_csv, row, reason)
                             skipped_rows += 1
                             skip_this_sample = True
                             break
                         except Exception as exc:
-                            logger.warning("[%s] attempt %s: Ollama request failed: %s", sample_id, attempt, exc)
+                            logger.warning("[%s] attempt %s: Ollama request failed: %s", row_id or "<no-id>", attempt, exc)
                             continue
 
                         extracted = _extract_first_json_object(response_text)
                         if extracted is None:
-                            logger.warning("[%s] attempt %s: could not extract a JSON object", sample_id, attempt)
+                            logger.warning("[%s] attempt %s: could not extract a JSON object", row_id or "<no-id>", attempt)
                             continue
 
                         classification, reason = _validate_classification(extracted)
                         if classification is not None:
                             break
 
-                        logger.warning("[%s] attempt %s: invalid classification payload: %s", sample_id, attempt, reason)
+                        logger.warning("[%s] attempt %s: invalid classification payload: %s", row_id or "<no-id>", attempt, reason)
 
                     if skip_this_sample:
                         # move on to next row without writing an output classification
@@ -468,7 +467,7 @@ def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Pa
 
                     if classification is None:
                         reason = f"discarded after {MAX_ATTEMPTS} attempts"
-                        logger.warning("[%s] %s", sample_id, reason)
+                        logger.warning("[%s] %s", row_id or "<no-id>", reason)
                         _append_skipped_row(skipped_csv, row, reason)
                         skipped_rows += 1
                         continue
@@ -481,10 +480,10 @@ def main(model: str, resume: bool, stream: bool, input_csv: Path, output_csv: Pa
             except Exception as exc:
                 skipped_rows += 1
                 reason = f"error: {exc}"
-                logger.warning("[%s/%s] skipped row %s due to error: %s", i, total_rows, sample_id, exc)
+                logger.warning("[%s/%s] skipped row %s due to error: %s", i, total_rows, row_id or "<no-id>", exc)
                 _append_skipped_row(skipped_csv, row, reason)
                 if error_logger:
-                    error_logger.error("row=%s sample_id=%s error=%s", i, sample_id, exc)
+                    error_logger.error("row=%s row_id=%s error=%s", i, row_id or "<no-id>", exc)
 
     logger.info(
         "Done. classified=%s discarded=%s skipped=%s total=%s",
@@ -501,12 +500,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--input",
-        default=str(DEFAULT_RAW_DATASET_PATH),
-        help="Path to the input CSV file. Defaults to the raw dataset source under data/datasets/raw.",
+        required=True,
+        help="Path to the input CSV file.",
     )
     parser.add_argument(
         "--output",
-        help="Optional output CSV path. Defaults to the canonical classified dataset path.",
+        help="Optional output CSV path. Defaults to a classified sibling path derived from the input.",
     )
     parser.add_argument(
         "--model",

@@ -195,6 +195,66 @@ class ParticipantKitSelectionTests(unittest.TestCase):
             self.assertEqual(assignment["samples_per_hardness"], 3)
             self.assertEqual(assignment["source_kind"], "dataset")
 
+    def test_dataset_sampling_accepts_row_uid_and_sanitizes_output_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            dataset_csv = tmp_path / "classified_dataset.csv"
+            out_root = tmp_path / "kits"
+
+            rows = []
+            for bucket in ("low", "medium", "high"):
+                for idx in range(1, 4):
+                    rows.append(
+                        {
+                            "row_uid": f"primevul:{bucket}:{idx}",
+                            "language": "C/C++",
+                            "hardness_strict": bucket,
+                            "code_sample": f"int {bucket}_{idx}(void) {{ return {idx}; }}",
+                            "primary_expertise_area": "Security / Application Security",
+                            "secondary_expertise_areas": "[]",
+                            "file_path": f"src/{bucket}_{idx}.c",
+                        }
+                    )
+
+            with dataset_csv.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+                writer.writeheader()
+                for row in rows:
+                    writer.writerow(row)
+
+            args = argparse.Namespace(
+                participant_id="P888",
+                condition="security",
+                phase="pilot",
+                metadata_csv=str(dataset_csv),
+                expertise_areas="Security / Application Security",
+                samples_per_hardness=3,
+                selection_seed=7,
+                out_root=str(out_root),
+                study_id="repairaudit-v1",
+                llm_provider="ollama",
+                llm_model="qwen2.5-coder:7b-instruct",
+                temperature=0.2,
+                top_p=0.9,
+                top_k=40,
+                num_predict=1200,
+                seed=42,
+                overwrite=False,
+            )
+
+            participant_kit.build_participant_kit(args)
+
+            run_dir = out_root / "P888" / "run_pilot_P888"
+            with (run_dir / "snippet_source.csv").open("r", newline="", encoding="utf-8") as handle:
+                selected = list(csv.DictReader(handle))
+
+            self.assertEqual(len(selected), 9)
+            self.assertTrue(all(row["snippet_id"].startswith("primevul:") for row in selected))
+
+            output_names = [path.name for path in (run_dir / "baseline").iterdir()]
+            self.assertTrue(all(":" not in name for name in output_names))
+            self.assertTrue(all(name.endswith(".c") for name in output_names))
+
 
 if __name__ == "__main__":
     unittest.main()

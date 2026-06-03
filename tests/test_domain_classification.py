@@ -56,6 +56,7 @@ class _ClassifyModule(Protocol):
         stream: bool,
         input_csv: Path,
         output_csv: Path,
+        chunk_size: int,
     ) -> None: ...
 
 
@@ -207,6 +208,7 @@ class ExpertiseClassificationTests(unittest.TestCase):
                     stream=False,
                     input_csv=input_csv,
                     output_csv=output_csv,
+                    chunk_size=10,
                 )
 
             result = pd.read_csv(output_csv)

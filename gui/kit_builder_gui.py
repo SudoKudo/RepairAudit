@@ -13,7 +13,7 @@ from tkinter import messagebox, ttk
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPERTISE_AREAS_PATH = REPO_ROOT / "tools" / "domain_classification" / "expertise_areas.jsonl"
-DEFAULT_KIT_SOURCE_PATH = "data/datasets/classified/participant_kit_pool.csv"
+DEFAULT_KIT_SOURCE_PATH = "data/datasets/classified/dataset_classified.csv"
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 

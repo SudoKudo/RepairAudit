@@ -13,6 +13,7 @@ import json
 import random
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,29 @@ LANGUAGE_EXTENSIONS = {
     "ruby": ".rb",
     "typescript": ".ts",
 }
+
+
+def _configure_csv_field_limit() -> None:
+    """Raise the CSV field limit so large code-sample cells can be read."""
+    limit = sys.maxsize
+    while True:
+        try:
+            csv.field_size_limit(limit)
+            return
+        except OverflowError:
+            limit //= 10
+
+
+_configure_csv_field_limit()
+
+
+def _dataset_identifier(row: dict[str, str]) -> str:
+    """Return the stable source identifier for one dataset row."""
+    for key in ("sample_id", "row_uid", "source_row_id"):
+        value = _clean_text(row.get(key, ""))
+        if value:
+            return value
+    return "snippet"
 
 
 def _participant_timestamp() -> str:
@@ -106,7 +130,7 @@ def _dataset_extension(row: dict[str, str]) -> str:
 
 def _dataset_output_name(row: dict[str, str]) -> str:
     """Build a stable participant-visible filename for one dataset row."""
-    sample_id = _clean_text(row.get("sample_id", "snippet")) or "snippet"
+    sample_id = _safe_name_fragment(_dataset_identifier(row)) or "snippet"
     file_name = Path(_clean_text(row.get("file_path", ""))).stem
     hint = _safe_name_fragment(file_name)[:40]
     suffix = _dataset_extension(row)
@@ -128,20 +152,16 @@ def _load_dataset_rows(dataset_csv: Path) -> list[dict[str, str]]:
         if not reader.fieldnames:
             raise ValueError(f"Dataset CSV has no header row: {dataset_csv}")
 
-        required = {
-            "sample_id",
-            "language",
-            "hardness_strict",
-            "code_sample",
-            "primary_expertise_area",
-        }
+        required = {"language", "hardness_strict", "code_sample", "primary_expertise_area"}
         missing = required - set(reader.fieldnames)
         if missing:
             raise ValueError(f"Dataset CSV missing required columns: {sorted(missing)}")
+        if not ({"sample_id"} <= set(reader.fieldnames) or {"row_uid"} <= set(reader.fieldnames)):
+            raise ValueError("Dataset CSV must include either sample_id or row_uid.")
 
         rows: list[dict[str, str]] = []
         for row in reader:
-            sample_id = _clean_text(row.get("sample_id"))
+            sample_id = _dataset_identifier({str(key): _clean_text(value) for key, value in row.items()})
             code_sample = _clean_text(row.get("code_sample"))
             if not sample_id or not code_sample:
                 continue
@@ -149,6 +169,7 @@ def _load_dataset_rows(dataset_csv: Path) -> list[dict[str, str]]:
             normalized_row = {str(key): _clean_text(value) for key, value in row.items()}
             normalized_row["source_kind"] = "dataset"
             normalized_row["snippet_id"] = sample_id
+            normalized_row.setdefault("sample_id", sample_id)
             normalized_row["output_name"] = _dataset_output_name(normalized_row)
             normalized_row["hardness_bucket"] = _normalize_hardness(normalized_row.get("hardness_strict", ""))
             normalized_row["secondary_expertise_areas"] = json.dumps(
@@ -273,7 +294,9 @@ def _load_snippets(
     if {"snippet_id", "baseline_relpath"} <= fieldnames:
         return _load_metadata_rows(source_csv)
 
-    if {"sample_id", "code_sample", "language", "hardness_strict", "primary_expertise_area"} <= fieldnames:
+    if {"code_sample", "language", "hardness_strict", "primary_expertise_area"} <= fieldnames and (
+        {"sample_id"} <= fieldnames or {"row_uid"} <= fieldnames
+    ):
         dataset_rows = _load_dataset_rows(source_csv)
         return _choose_dataset_snippets(
             rows=dataset_rows,
@@ -285,7 +308,8 @@ def _load_snippets(
 
     raise ValueError(
         "Source CSV must either contain snippet_id/baseline_relpath metadata columns "
-        "or sample_id/code_sample/hardness_strict/primary_expertise_area dataset columns."
+        "or dataset columns including code_sample/language/hardness_strict/primary_expertise_area "
+        "plus either sample_id or row_uid."
     )
 
 
@@ -440,80 +464,45 @@ def _write_participant_readme(
         expertise_lines = f"- Assigned expertise areas: `{', '.join(expertise_areas)}`\n"
     content = f"""# RepairAudit Participant Kit
 
-Use the RepairAudit participant app for all study instructions and task steps. This README is only for launch and troubleshooting.
+Use the participant app for all task instructions. This README only covers setup, launch, and submission.
 
-## 1) Local Setup
+## 1) Before You Start
 1. Make sure Python is installed on the machine that will run this kit. It is only needed to launch the local app and packaging tools.
 2. Install Ollama from [https://ollama.com/download](https://ollama.com/download).
-3. Open a terminal and run: `ollama pull {model_name}`
-4. Start Ollama before opening the study app:
+3. Pull the assigned model once:
+   - `ollama pull {model_name}`
+4. Start Ollama before opening the app:
    - `ollama serve`
-5. Keep Ollama running in the background while you complete the study.
+5. Keep Ollama running while you complete the study.
 
-## 2) Start The Study App
+## 2) Start The App
 1. On Windows: double-click `Launch_Study_Web_App.bat`.
 2. On macOS/Linux: run `bash Launch_Study_Web_App.sh` from a terminal in this folder.
 3. Keep the command window or terminal open while you work.
-4. The browser app opens automatically. Use that app for everything.
-5. The study timer does **not** start until you review the in-app onboarding and click **Begin Study**.
+4. The browser app should open automatically. If it does not, copy the localhost URL shown in the launcher window into your browser.
+5. Complete the participant profile in the app, review the onboarding, and click **Begin Study** to start.
 
-## 3) Your Assignment
+## 3) Assigned Configuration
 - Participant ID: `{participant_id}`
 - Condition: `{condition}`
 - Phase: `{phase}`
 - Assigned model: `{model_name}`
 {expertise_lines}
 
-## 4) In-App Workflow
-- Complete the participant profile in the app.
-- Review the onboarding/help panel.
-- Click **Begin Study** to start the timer and unlock the task workflow.
-- For each assigned snippet, review the read-only baseline code, copy the relevant code into the in-app LLM chat, ask for a repair, then paste or refine the repaired result in the **Final Submitted Code** box.
-- The baseline pane is reference-only. Only the code in **Final Submitted Code** is exported for researcher analysis.
-- Use the in-app LLM chat assigned with this kit. Do not paste study materials into outside assistants or web services unless the research team explicitly instructed you to do so.
-- Use **Finish (Build ZIP)** in the app when done.
+## 4) Finish And Return
+1. Complete all assigned snippets in the app.
+2. Use **Finish (Build ZIP)** when you are done.
+3. The kit writes the return ZIP into `exports/`.
+4. Send that ZIP back to the research team.
 
-## 5) What The App Auto-Logs
-- LLM provider/model
-- Total turns
-- First and final prompts
-- Full turn history in `chat_log.jsonl`
-- Session timing with pause/resume recovery
+## 5) Troubleshooting
+- If the app cannot connect to Ollama, make sure `ollama serve` is still running.
+- If the launcher says `py` or `python` is missing, install Python and run the launcher again.
+- If the browser does not open automatically, use the localhost URL shown in the launcher window.
+- If the app closes unexpectedly, reopen it with the launcher and continue in the same kit folder.
 
-## 6) What You Must Enter Manually
-- `applied_turns`
-- `strategy_primary`
-- `confidence_1to5`
-- `notes` (optional)
-
-## 7) Kit Folder Structure
-```text
-{participant_id}/
-|-- README.md
-|-- study_config.lock.json
-|-- kit_manifest.json
-|-- participant_web_app.py
-|-- Launch_Study_Web_App.bat
-|-- Launch_Study_Web_App.sh
-|-- package_submission.py
-`-- {run_dir_name}/
-    |-- baseline/*
-    |-- edits/*
-    |-- logs/participant_profile.json
-    |-- logs/snippet_log.csv
-    |-- logs/chat_log.jsonl
-    |-- condition.txt
-    `-- start_end_times.json
-```
-
-## 8) Privacy Rules
+## 6) Privacy Reminder
 Do not include personal identifiers or sensitive account data in prompts, code comments, or notes.
-
-## 9) Help
-If the app cannot connect to Ollama, start/restart `ollama serve` and try again.
-If the app does not open automatically, copy the localhost URL shown in the launcher window into your browser.
-If the launcher says `py` or `python` is missing, install Python and run the launcher again.
-If you accidentally clear the submission box for a snippet, reopen the snippet from the left sidebar and paste your repaired code back in before finishing the study.
 """
     path.write_text(content, encoding="utf-8")
 

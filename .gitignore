@@ -69,3 +69,7 @@ tools/domain_classification/dataset.csv
 # Large local datasets
 /tools/domain_classification/dataset.csv
 /tools/domain_classification/dataset_classified.csv
+/tools/domain_classification/dataset_classified/
+/tools/domain_classification/dataset_classified_skipped.csv
+/data/datasets/classified/dataset_classified.csv
+/data/datasets/classified/dataset_classified_skipped.csv

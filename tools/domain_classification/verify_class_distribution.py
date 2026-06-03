@@ -21,11 +21,12 @@ import pandas as pd
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for the classified-dataset distribution check."""
     p = argparse.ArgumentParser(description="Verify expertise classification distribution")
     p.add_argument(
         "--input",
-        default="tools/domain_classification/dataset_classified.csv",
-        help="Path to the classified CSV (default: tools/domain_classification/dataset_classified.csv)",
+        default="data/datasets/classified/dataset_classified.csv",
+        help="Path to the classified CSV (default: data/datasets/classified/dataset_classified.csv)",
     )
     p.add_argument(
         "--primary-column",
@@ -45,6 +46,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """Print high-level classification coverage and label counts for one CSV."""
     args = parse_args()
     input_path = Path(args.input)
     if not input_path.exists():

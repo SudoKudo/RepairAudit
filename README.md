@@ -67,6 +67,12 @@ RepairAudit/
 |   |   |-- html_report.py                   # Aggregated offline HTML report generator
 |   |   `-- __init__.py
 |   |
+|   |-- domain_classification/
+|   |   |-- classify.py                      # Append expertise labels to a raw CWE/sample dataset with Ollama
+|   |   |-- verify_class_distribution.py     # Quick distribution sanity check for classified datasets
+|   |   |-- expertise_areas.jsonl            # Closed expertise taxonomy used by classifier and kit builder
+|   |   `-- dataset_classified.zip           # Downloadable archive copy of the large classified dataset
+|   |
 |   |-- validators/
 |   |   `-- bandit_runner.py                 # Bandit wrapper for validation signal
 |   `-- __init__.py
@@ -78,9 +84,12 @@ RepairAudit/
 |
 |-- data/
 |   |-- metadata/snippet_metadata.csv        # Snippet registry used by kit generation and analysis
+|   |-- datasets/classified/                 # Local-only large dataset CSVs used for dataset-backed kit sampling
 |   |-- raw/.keep                            # Placeholder
 |   `-- aggregated/.keep                     # Placeholder for generated aggregate artifacts
 |
+|-- docs/figures/                            # README screenshots
+|-- tests/                                   # Focused regression tests for classifier, metrics, kit selection, privacy
 |-- participant_kits/                        # Generated participant distribution kits
 `-- runs/                                    # Imported participant submissions + per-run outputs
 ```
@@ -95,7 +104,7 @@ py -3 -m venv .venv
 ```
 If `py` is unavailable on your machine, use your installed Python launcher for
 that one environment-creation step. After the environment exists, use
-`venv\Scripts\python.exe` for all project commands so the pipeline does not
+`.venv\Scripts\python.exe` for all project commands so the pipeline does not
 depend on global PATH state.
 
 Researcher-side judge requirement:
@@ -120,37 +129,40 @@ Before publishing this repository, remove or ignore generated study artifacts:
 - `participant_kits/` contents
 - `runs/` contents
 - `data/aggregated/` outputs
+- `data/datasets/classified/dataset_classified.csv`
+- `data/datasets/classified/dataset_classified_skipped.csv`
 - `tmp_*/` scratch folders
 - root helper scripts prefixed with `_`
 
 The tracked repository should contain source, metadata, snippets, config, and documentation. Participant data, generated kits, and analysis outputs should remain local-only.
 
 Note:
-- `venv/` is a local-only environment and is intentionally gitignored.
+- `.venv/` or `venv/` is a local-only environment and is intentionally gitignored.
 - `gui/.cache/` stores local Study GUI session state and is intentionally gitignored.
 
 ## 4) Pipeline Flow
 Researcher flow:
-1. Generate participant kits.
-2. Distribute kits.
-3. Receive participant ZIP submissions.
-4. Extract each returned submission ZIP into `runs/<phase>/` so the archive creates `runs/<phase>/<participant_id>/`.
-5. Analyze each run.
-6. Merge interaction logs.
-7. Aggregate pilot metrics.
-8. Compute stats.
-9. Compute snippet-level models.
-10. Build HTML report.
+1. Prepare or refresh the classified dataset used for kit sampling.
+2. Generate participant kits.
+3. Distribute kits.
+4. Receive participant ZIP submissions.
+5. Extract each returned submission ZIP into `runs/<phase>/` so the archive creates `runs/<phase>/<participant_id>/`.
+6. Analyze each run.
+7. Merge interaction logs.
+8. Aggregate pilot metrics.
+9. Compute stats.
+10. Compute snippet-level models.
+11. Build HTML report.
 
 One-command map (high level):
 ```powershell
-venv\Scripts\python.exe -m scripts.study_cli build-participant-kit ...
-venv\Scripts\python.exe -m scripts.study_cli analyze-run ...
-venv\Scripts\python.exe -m scripts.study_cli merge-interaction ...
-venv\Scripts\python.exe -m scripts.study_cli aggregate-pilot
-venv\Scripts\python.exe -m scripts.study_cli compute-stats
-venv\Scripts\python.exe -m scripts.study_cli compute-models
-venv\Scripts\python.exe -m scripts.study_cli build-report
+.venv\Scripts\python.exe -m scripts.study_cli build-participant-kit ...
+.venv\Scripts\python.exe -m scripts.study_cli analyze-run ...
+.venv\Scripts\python.exe -m scripts.study_cli merge-interaction ...
+.venv\Scripts\python.exe -m scripts.study_cli aggregate-pilot
+.venv\Scripts\python.exe -m scripts.study_cli compute-stats
+.venv\Scripts\python.exe -m scripts.study_cli compute-models
+.venv\Scripts\python.exe -m scripts.study_cli build-report
 ```
 
 ## 5) CLI Command Map
@@ -172,9 +184,33 @@ Use the GUI first when possible. The CLI remains available for scripted or manua
 
 ### Utilities
 - `privacy-check`: scan the repo for participant data or secret-like content before publish
+- `tools/domain_classification/classify.py`: classify a raw sample dataset into expertise areas
+- `tools/domain_classification/verify_class_distribution.py`: inspect primary/secondary expertise distributions
 
 ## 6) Data Contracts
-### 6.1 Snippet metadata contract
+### 6.1 Dataset-backed kit source contract
+File: `data/datasets/classified/dataset_classified.csv`
+
+Required columns used by dataset-backed kit generation:
+- `code_sample`
+- `language`
+- `hardness_strict`
+- `primary_expertise_area`
+- either `sample_id` or `row_uid`
+
+Optional but strongly recommended:
+- `secondary_expertise_areas`
+- `file_path`
+- `source_project`
+- `cwe_primary`
+- `vulnerability_type`
+
+Behavior:
+- the kit sampler filters the dataset by selected expertise areas using both `primary_expertise_area` and `secondary_expertise_areas`
+- it then selects `3` `low`, `3` `medium`, and `3` `high` samples by default
+- if a hardness bucket does not have enough expertise matches, the sampler backfills from the same hardness bucket
+
+### 6.2 Snippet metadata contract
 File: `data/metadata/snippet_metadata.csv`
 
 Columns used by kit generation:
@@ -193,19 +229,50 @@ Recommended descriptive columns:
 - `task_short`
 - `notes`
 
-### 6.2 Run folder contract
+### 6.3 Run folder contract
 Each analyzed run should contain:
+- `runs/<phase>/<participant_id>/baseline/*`
 - `runs/<phase>/<participant_id>/edits/*`
 - `runs/<phase>/<participant_id>/logs/snippet_log.csv`
 - `runs/<phase>/<participant_id>/logs/chat_log.jsonl`
+- `runs/<phase>/<participant_id>/snippet_source.csv`
+- `runs/<phase>/<participant_id>/study_assignment.json`
 - `runs/<phase>/<participant_id>/condition.txt`
 
 Generated by analysis:
 - `runs/<phase>/<participant_id>/analysis/*`
 - `runs/<phase>/<participant_id>/diffs/*`
 
-## 7) How `snippet_metadata.csv` Gets Updated
-`snippet_metadata.csv` is a source-of-truth input file. It is not auto-generated by default.
+## 7) How Source CSVs Get Updated
+### 7.1 Classified dataset workflow
+Current layout:
+- working classified dataset: `data/datasets/classified/dataset_classified.csv`
+- skipped-row output from classification runs: `data/datasets/classified/dataset_classified_skipped.csv`
+- tracked archive copy for download: `tools/domain_classification/dataset_classified.zip`
+
+Classification flow:
+1. Start from a raw CSV that contains code samples plus the context columns you want the model to use.
+2. Run:
+```powershell
+.venv\Scripts\python.exe tools\domain_classification\classify.py ^
+  --input path\to\raw_source.csv ^
+  --output data/datasets/classified/dataset_classified.csv ^
+  --model qwen2.5-coder:7b-instruct ^
+  --fresh
+```
+3. Verify the distribution:
+```powershell
+.venv\Scripts\python.exe tools\domain_classification\verify_class_distribution.py ^
+  --input data/datasets/classified/dataset_classified.csv
+```
+4. Use that classified CSV as the kit source in the GUI or CLI.
+
+Notes:
+- the large classified CSV is intentionally local-only and gitignored
+- the taxonomy used by both the classifier and kit builder lives in `tools/domain_classification/expertise_areas.jsonl`
+
+### 7.2 File-backed snippet metadata
+`snippet_metadata.csv` is still the source-of-truth input file for the checked-in baseline/gold snippet corpus and synthetic run tests. It is not auto-generated by default.
 
 Update process:
 1. Add or modify snippet source files in:
@@ -226,10 +293,13 @@ Important behavior:
 ### 8.1 Build kits
 GUI (primary option):
 ```powershell
-venv\Scripts\python.exe gui\kit_builder_gui.py
+.venv\Scripts\python.exe gui\kit_builder_gui.py
 ```
 Use the GUI to:
 - choose output folder, condition, phase, and model settings
+- choose the source CSV used for kit generation
+- check the participant's expertise areas from the loaded taxonomy
+- set `Samples / Hardness` and `Selection Seed`
 - preview participant IDs before writing folders
 - create one or more participant kits in one pass
 
@@ -238,17 +308,22 @@ Use the GUI to:
 
 CLI (secondary option):
 ```powershell
-venv\Scripts\python.exe -m scripts.study_cli build-participant-kit ^
+.venv\Scripts\python.exe -m scripts.study_cli build-participant-kit ^
   --participant_id P101 ^
   --condition security ^
   --phase pilot ^
-  --metadata_csv data/metadata/snippet_metadata.csv ^
+  --metadata_csv data/datasets/classified/dataset_classified.csv ^
+  --expertise_areas "Backend / API Development,Security / Application Security" ^
+  --samples_per_hardness 3 ^
+  --selection_seed 42 ^
   --out_root participant_kits
 ```
 
 Default behavior:
 - GUI defaults to `security`.
 - CLI defaults to `security` if `--condition` is not provided.
+- If no expertise areas are selected, dataset-backed kit generation samples from the full classified dataset.
+- If `--metadata_csv` points at `data/metadata/snippet_metadata.csv`, the expertise/hardness selection settings are ignored and the kit uses the file-backed snippet list.
 
 ### 8.2 What is inside a kit
 ```text
@@ -260,16 +335,22 @@ participant_kits/<participant_id>/
 |-- Launch_Study_Web_App.bat
 |-- Launch_Study_Web_App.sh
 |-- package_submission.py
-|-- exports/
 `-- run_<phase>_<participant_id>/
     |-- baseline/*
     |-- edits/*
     |-- logs/participant_profile.json
     |-- logs/snippet_log.csv
     |-- logs/chat_log.jsonl
+    |-- snippet_source.csv
+    |-- study_assignment.json
     |-- condition.txt
     `-- start_end_times.json
 ```
+
+Notes:
+- `exports/` is created when the participant packages a submission
+- `snippet_source.csv` stores the exact sampled rows used to build the kit
+- `study_assignment.json` records the source CSV, expertise filters, hardness settings, and selection seed used for that participant
 
 ### 8.3 Participant web app notes
 - Web app is driven by the snippet list in the kit, not by a fixed snippet count.
@@ -362,7 +443,7 @@ Edit:
 
 Then rebuild:
 ```powershell
-venv\Scripts\python.exe -m scripts.study_cli build-report --phase pilot
+.venv\Scripts\python.exe -m scripts.study_cli build-report --phase pilot
 ```
 
 ## 11) Researcher Runbook
@@ -372,7 +453,7 @@ Before you analyze returned runs:
 
 ### 11.1 Preferred workflow: Study GUI
 ```powershell
-venv\Scripts\python.exe gui\study_gui.py
+.venv\Scripts\python.exe gui\study_gui.py
 ```
 Use the Study GUI to:
 1. Set `Phase`, `Metadata CSV`, and judge strategy settings.
@@ -396,16 +477,16 @@ Use the Study GUI to:
 
 #### Analyze one participant
 ```powershell
-venv\Scripts\python.exe -m scripts.study_cli analyze-run --participant_id P101 --phase pilot --metadata_csv data/metadata/snippet_metadata.csv
-venv\Scripts\python.exe -m scripts.study_cli merge-interaction --run_dir runs/pilot/P101
+.venv\Scripts\python.exe -m scripts.study_cli analyze-run --participant_id P101 --phase pilot --metadata_csv data/metadata/snippet_metadata.csv
+.venv\Scripts\python.exe -m scripts.study_cli merge-interaction --run_dir runs/pilot/P101
 ```
 
 #### Aggregate all participants and build outputs
 ```powershell
-venv\Scripts\python.exe -m scripts.study_cli aggregate-pilot
-venv\Scripts\python.exe -m scripts.study_cli compute-stats --in_csv data/aggregated/pilot_summary.csv
-venv\Scripts\python.exe -m scripts.study_cli compute-models --runs_root runs/pilot
-venv\Scripts\python.exe -m scripts.study_cli build-report --phase pilot --out_html data/aggregated/report.html
+.venv\Scripts\python.exe -m scripts.study_cli aggregate-pilot
+.venv\Scripts\python.exe -m scripts.study_cli compute-stats --in_csv data/aggregated/pilot_summary.csv
+.venv\Scripts\python.exe -m scripts.study_cli compute-models --runs_root runs/pilot
+.venv\Scripts\python.exe -m scripts.study_cli build-report --phase pilot --out_html data/aggregated/report.html
 ```
 
 ## 12) Key Outputs
@@ -437,27 +518,27 @@ Aggregate metrics currently emitted:
 ## 13) Validation and Maintenance Commands
 Show CLI help:
 ```powershell
-venv\Scripts\python.exe -m scripts.study_cli --help
+.venv\Scripts\python.exe -m scripts.study_cli --help
 ```
 
 Compile sanity check:
 ```powershell
-venv\Scripts\python.exe -m compileall scripts tools gui
+.venv\Scripts\python.exe -m compileall scripts tools gui
 ```
 
 Synthetic pipeline smoke test:
 ```powershell
-venv\Scripts\python.exe -m scripts.study_cli make-test-runs --core-only
-venv\Scripts\python.exe -m scripts.study_cli aggregate-pilot
-venv\Scripts\python.exe -m scripts.study_cli compute-stats
-venv\Scripts\python.exe -m scripts.study_cli compute-models
-venv\Scripts\python.exe -m scripts.study_cli build-report
+.venv\Scripts\python.exe -m scripts.study_cli make-test-runs --core-only
+.venv\Scripts\python.exe -m scripts.study_cli aggregate-pilot
+.venv\Scripts\python.exe -m scripts.study_cli compute-stats
+.venv\Scripts\python.exe -m scripts.study_cli compute-models
+.venv\Scripts\python.exe -m scripts.study_cli build-report
 ```
 
 Clean participant kits:
 ```powershell
-venv\Scripts\python.exe -m scripts.study_cli clean-participant-kits --out_root participant_kits --all --dry_run
-venv\Scripts\python.exe -m scripts.study_cli clean-participant-kits --out_root participant_kits --all
+.venv\Scripts\python.exe -m scripts.study_cli clean-participant-kits --out_root participant_kits --all --dry_run
+.venv\Scripts\python.exe -m scripts.study_cli clean-participant-kits --out_root participant_kits --all
 ```
 
 ## 14) Security and IRB-Oriented Controls
@@ -478,7 +559,7 @@ Run_Privacy_Check.bat
 
 CLI equivalent:
 ```powershell
-venv\Scripts\python.exe -m scripts.study_cli privacy-check
+.venv\Scripts\python.exe -m scripts.study_cli privacy-check
 ```
 
 The check fails (`exit code 1`) if blocked participant-data paths or high-confidence secret signatures are found.

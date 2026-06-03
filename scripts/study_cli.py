@@ -35,7 +35,9 @@ from scripts.participant_kit import build_participant_kit, clean_participant_kit
 from scripts.privacy_check import run_prepublish_check
 
 DEFAULT_METADATA_PATH = Path("data") / "metadata" / "snippet_metadata.csv"
-DEFAULT_KIT_SOURCE_PATH = Path("data") / "datasets" / "classified" / "participant_kit_pool.csv"
+DEFAULT_KIT_SOURCE_PATH = (
+    Path("data") / "datasets" / "classified" / "dataset_classified.csv"
+)
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Synthetic run generation constants (used by make-test-runs).

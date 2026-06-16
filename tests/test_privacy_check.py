@@ -12,7 +12,9 @@ class PrivacyCheckTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             java_file = repo_root / "Example.java"
-            java_file.write_text('String token = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ123456";\n', encoding="utf-8")
+            prefix = "sk-"
+            suffix = "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+            java_file.write_text(f'String token = "{prefix}{suffix}";\n', encoding="utf-8")
 
             findings = _scan_secret_patterns(repo_root, [java_file])
 

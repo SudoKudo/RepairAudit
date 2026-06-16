@@ -18,7 +18,6 @@ from scipy.stats import norm
 
 _TRUTHY = {"1", "true", "t", "yes", "y"}
 _MODEL_BASE_COLUMNS = [
-    "condition_security",
     "llm_turns",
     "llm_applied_ratio",
     "llm_confidence_1to5",
@@ -134,7 +133,6 @@ def build_snippet_model_dataset(runs_root: str | Path) -> pd.DataFrame:
                     "participant_id": participant_code,
                     "snippet_id": str(row.get("snippet_id", "") or "").strip(),
                     "condition": condition,
-                    "condition_security": 1 if condition == "security" else 0,
                     "primary_source": primary_source,
                     "primary_outcome": primary,
                     "primary_mitigated": 1 if primary == "Mitigated" else 0,
@@ -313,7 +311,7 @@ def fit_primary_mitigation_model(df: pd.DataFrame) -> dict[str, Any]:
         "converged": bool(fit["converged"]),
         "iterations": int(fit["iterations"]),
         "coefficients": coefficients,
-        "focal_terms": [name for name in term_names if name in {"condition_security", "llm_turns", "llm_applied_ratio", "llm_confidence_1to5"}],
+        "focal_terms": [name for name in term_names if name in {"llm_turns", "llm_applied_ratio", "llm_confidence_1to5"}],
     }
 
 
@@ -341,7 +339,7 @@ def _text_summary(model: dict[str, Any]) -> str:
     )
 
     coeffs = {row["term"]: row for row in model.get("coefficients", []) if isinstance(row, dict)}
-    for term in ["condition_security", "llm_turns", "llm_applied_ratio", "llm_confidence_1to5"]:
+    for term in ["llm_turns", "llm_applied_ratio", "llm_confidence_1to5"]:
         row = coeffs.get(term)
         if not row:
             continue

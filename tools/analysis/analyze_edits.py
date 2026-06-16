@@ -97,6 +97,58 @@ def _judge_enabled_from_config() -> bool:
         return False
 
 
+def _load_run_snippet_files(run_path: Path) -> dict[str, str]:
+    """Read participant-side edited-file mapping from the run folder when available."""
+    repo_root = Path(__file__).resolve().parents[2]
+    candidate_paths = [run_path / "researcher_assignment.json"]
+    map_name = f"{run_path.parent.name}__{run_path.name}.json"
+    candidate_paths.extend(sorted(repo_root.glob(f"**/_researcher_maps/{map_name}")))
+    candidate_paths.append(run_path / "study_assignment.json")
+
+    for candidate in candidate_paths:
+        if not candidate.exists():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        mapping: dict[str, str] = {}
+        snippet_rows = payload.get("snippet_mappings", [])
+        if isinstance(snippet_rows, list):
+            for row in snippet_rows:
+                if not isinstance(row, dict):
+                    continue
+                source_id = str(
+                    row.get("source_snippet_id") or row.get("snippet_id") or ""
+                ).strip()
+                file_name = Path(
+                    str(
+                        row.get("participant_filename")
+                        or row.get("output_name")
+                        or ""
+                    ).strip()
+                ).name
+                if source_id and file_name:
+                    mapping[source_id] = file_name
+        if mapping:
+            return mapping
+
+        raw_mapping = payload.get("snippet_files", {})
+        if isinstance(raw_mapping, dict):
+            for key, value in raw_mapping.items():
+                snippet_id = str(key or "").strip()
+                file_name = Path(str(value or "").strip()).name
+                if snippet_id and file_name:
+                    mapping[snippet_id] = file_name
+        if mapping:
+            return mapping
+
+    return {}
+
+
 def analyze_participant(run_dir: str, metadata_csv: str, save_csv: bool = True) -> Dict[str, Any]:
     """Analyze one participant run and persist per-snippet outputs."""
     run_path = Path(run_dir)
@@ -113,6 +165,7 @@ def analyze_participant(run_dir: str, metadata_csv: str, save_csv: bool = True) 
     phase = run_path.parent.name
     condition_path = run_path / "condition.txt"
     condition = condition_path.read_text(encoding="utf-8", errors="ignore").strip() if condition_path.exists() else ""
+    snippet_files = _load_run_snippet_files(run_path)
 
     judge_enabled = _judge_enabled_from_config()
     results: List[Dict[str, Any]] = []
@@ -130,7 +183,10 @@ def analyze_participant(run_dir: str, metadata_csv: str, save_csv: bool = True) 
 
         baseline_path = Path(baseline_rel) if baseline_rel else None
         gold_path = Path(gold_rel) if gold_rel else None
-        edited_path = edits_dir / (baseline_path.name if baseline_path and baseline_path.name else f"{snippet_id}.txt")
+        edited_name = snippet_files.get(snippet_id)
+        if not edited_name:
+            edited_name = baseline_path.name if baseline_path and baseline_path.name else f"{snippet_id}.txt"
+        edited_path = edits_dir / edited_name
         language = _language_from_metadata(item, baseline_path)
 
         row_base: Dict[str, Any] = {

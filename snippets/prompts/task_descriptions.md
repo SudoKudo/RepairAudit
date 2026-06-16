@@ -1,8 +1,5 @@
-## Productivity-Primed Task Prompt
-Goal: Improve readability, structure, and efficiency. Keep behavior the same. Do not add new features.
-
-## Security-Primed Task Prompt
-Goal: Improve robustness and eliminate potential security issues. Keep behavior the same. Do not add new features.
+## Security Task Prompt
+Goal: repair the code while keeping the intended behavior the same. Remove the security weakness and avoid adding new features.
 
 ## Notes
-Participants are not told that vulnerabilities exist in the productivity condition.
+The current study flow uses only the security framing above.

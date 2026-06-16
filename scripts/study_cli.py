@@ -130,17 +130,75 @@ def _resolve_run_dir(run_dir: Path) -> Path:
     return run_dir
 
 
-def _edited_filename(item: dict[str, str]) -> str:
+def _load_run_snippet_files(run_dir: Path) -> dict[str, str]:
+    """Resolve original snippet IDs to participant-facing filenames for analysis and diff generation."""
+    candidate_paths = [run_dir / "researcher_assignment.json"]
+    map_name = f"{run_dir.parent.name}__{run_dir.name}.json"
+    candidate_paths.extend(sorted(REPO_ROOT.glob(f"**/_researcher_maps/{map_name}")))
+    candidate_paths.append(run_dir / "study_assignment.json")
+
+    for candidate in candidate_paths:
+        if not candidate.exists():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        mapping: dict[str, str] = {}
+        snippet_rows = payload.get("snippet_mappings", [])
+        if isinstance(snippet_rows, list):
+            for row in snippet_rows:
+                if not isinstance(row, dict):
+                    continue
+                source_id = str(
+                    row.get("source_snippet_id") or row.get("snippet_id") or ""
+                ).strip()
+                file_name = Path(
+                    str(
+                        row.get("participant_filename")
+                        or row.get("output_name")
+                        or ""
+                    ).strip()
+                ).name
+                if source_id and file_name:
+                    mapping[source_id] = file_name
+        if mapping:
+            return mapping
+
+        raw_mapping = payload.get("snippet_files", {})
+        if isinstance(raw_mapping, dict):
+            for key, value in raw_mapping.items():
+                snippet_id = str(key or "").strip()
+                file_name = Path(str(value or "").strip()).name
+                if snippet_id and file_name:
+                    mapping[snippet_id] = file_name
+        if mapping:
+            return mapping
+
+    return {}
+
+
+def _edited_filename(item: dict[str, str], snippet_files: dict[str, str] | None = None) -> str:
     """Return the run-local edited filename for one metadata row."""
+    snippet_id = (item.get("snippet_id") or "").strip()
+    if snippet_files and snippet_id in snippet_files:
+        return snippet_files[snippet_id]
     baseline = Path(item.get("baseline_relpath", "")).name
     if baseline:
         return baseline
-    return f'{item.get("snippet_id", "").strip() or "snippet"}.txt'
+    return f'{snippet_id or "snippet"}.txt'
 
 
-def _edited_path_for_item(edits_dir: Path, item: dict[str, str]) -> Path:
+def _edited_path_for_item(
+    edits_dir: Path,
+    item: dict[str, str],
+    snippet_files: dict[str, str] | None = None,
+) -> Path:
     """Resolve the edited file path for one metadata row inside edits/."""
-    return edits_dir / _edited_filename(item)
+    return edits_dir / _edited_filename(item, snippet_files)
 
 
 def _copy_baselines_to_edits(run_dir: Path, snippets: list[dict[str, str]]) -> None:
@@ -234,11 +292,12 @@ def cmd_analyze_run(args: argparse.Namespace) -> None:
     analyze_participant(str(run_dir), str(metadata_csv))
 
     rows = _load_metadata_rows(metadata_csv)
+    snippet_files = _load_run_snippet_files(run_dir)
     diff_stats: dict[str, dict[str, int]] = {}
     for row in rows:
         sid = row["snippet_id"]
         baseline = Path(row["baseline_relpath"])
-        edited = _edited_path_for_item(edits_dir, row)
+        edited = _edited_path_for_item(edits_dir, row, snippet_files)
         outdiff = run_dir / "diffs" / f"{sid}.diff"
         if baseline.exists() and edited.exists():
             diff_stats[sid] = make_diff(str(baseline), str(edited), str(outdiff))
@@ -919,17 +978,17 @@ def _make_synthetic_run(participant_id: str, condition: str, mode: str, *, seed:
 
 
 def cmd_make_test_runs(args: argparse.Namespace) -> None:
-    """Create synthetic pilot runs for quick end-to-end testing and demos."""
+    """Create synthetic pilot runs for UI, import-path, and post-analysis testing."""
     runs_root = REPO_ROOT / "runs" / "pilot"
     runs_root.mkdir(parents=True, exist_ok=True)
 
-    _make_synthetic_run("TEST001", condition="productivity", mode="baseline", seed=1001)
+    _make_synthetic_run("TEST001", condition="security", mode="baseline", seed=1001)
     _make_synthetic_run("TEST002", condition="security", mode="gold", seed=2002)
-    _make_synthetic_run("TEST003", condition="productivity", mode="mixed", seed=3003)
+    _make_synthetic_run("TEST003", condition="security", mode="mixed", seed=3003)
 
     if not args.core_only:
         _make_synthetic_run("TEST004", condition="security", mode="mixed", seed=4004)
-        _make_synthetic_run("TEST005", condition="productivity", mode="gold", seed=5005)
+        _make_synthetic_run("TEST005", condition="security", mode="gold", seed=5005)
 
     print(f"Created synthetic runs in: {runs_root}")
 
@@ -940,7 +999,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_start = sub.add_parser("start-run", help="Initialize a participant run.")
     p_start.add_argument("--participant_id", required=True)
-    p_start.add_argument("--condition", required=True, choices=["productivity", "security"])
+    p_start.add_argument("--condition", default="security", choices=["security"])
     p_start.add_argument("--phase", default="pilot", choices=["self_test", "pilot", "main"])
     p_start.add_argument("--metadata_csv", default=str(DEFAULT_METADATA_PATH))
     p_start.set_defaults(func=cmd_start_run)
@@ -990,7 +1049,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_mark.add_argument("--event", required=True, choices=["start", "end"])
     p_mark.set_defaults(func=cmd_mark_snippet)
 
-    p_make = sub.add_parser("make-test-runs", help="Create synthetic test runs for pipeline and UI checks.")
+    p_make = sub.add_parser("make-test-runs", help="Create synthetic raw runs for UI and downstream pipeline checks.")
     p_make.add_argument("--core-only", action="store_true", help="Create TEST001-TEST003 only.")
     p_make.set_defaults(func=cmd_make_test_runs)
 
@@ -999,7 +1058,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Create a participant-facing kit from a source CSV and locked study settings.",
     )
     p_kit.add_argument("--participant_id", required=True)
-    p_kit.add_argument("--condition", default="security", choices=["productivity", "security"])
+    p_kit.add_argument("--condition", default="security", choices=["security"])
     p_kit.add_argument("--phase", default="pilot", choices=["self_test", "pilot", "main"])
     p_kit.add_argument(
         "--metadata_csv",
@@ -1028,12 +1087,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_kit.add_argument("--out_root", default="participant_kits")
     p_kit.add_argument("--study_id", default="repairaudit-v1")
+    p_kit.add_argument(
+        "--participant_os",
+        choices=["windows", "macos", "linux"],
+        default="windows",
+        help="Target operating system for the participant launcher written into the kit.",
+    )
     p_kit.add_argument("--llm_provider", default="ollama")
-    p_kit.add_argument("--llm_model", default="qwen2.5-coder:7b-instruct")
+    p_kit.add_argument("--llm_model", default="qwen3.6:27b")
+    p_kit.add_argument(
+        "--llm_base_url",
+        default="http://127.0.0.1:11434",
+        help="Base URL for the participant-side LLM endpoint (default: local Ollama).",
+    )
     p_kit.add_argument("--temperature", type=float, default=0.2)
     p_kit.add_argument("--top_p", type=float, default=0.9)
     p_kit.add_argument("--top_k", type=int, default=40)
-    p_kit.add_argument("--num_predict", type=int, default=1200)
+    p_kit.add_argument("--num_predict", type=int, default=1024)
     p_kit.add_argument("--seed", type=int, default=42)
     p_kit.add_argument("--overwrite", action="store_true")
     p_kit.set_defaults(func=cmd_build_participant_kit)

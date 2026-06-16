@@ -1,8 +1,4 @@
-"""Pre-publish privacy/safety gate for researcher workflows.
-
-This checker helps prevent accidental publication of participant data and
-credentials by scanning the repository for high-risk artifacts before push.
-"""
+"""Scan the repository for study artifacts and obvious secrets before publish."""
 
 from __future__ import annotations
 
@@ -143,6 +139,8 @@ def _scan_blocked_directories(repo_root: Path) -> list[Finding]:
                 )
             )
     return findings
+
+
 def _scan_sensitive_filenames(repo_root: Path, files: Iterable[Path]) -> list[Finding]:
     """Flag suspicious file names that often indicate leaked participant artifacts."""
     findings: list[Finding] = []
@@ -229,9 +227,9 @@ def _scan_gitignore(repo_root: Path) -> list[Finding]:
 def run_prepublish_check(repo_root: Path) -> tuple[bool, list[Finding], str]:
     """Run all checks and return (ok, findings, scan_mode)."""
     repo_root = repo_root.resolve()
-    mode = "git-tracked" if _is_git_repo(repo_root) else "workspace-scan"
+    mode = "git-tracked + blocked-data sweep" if _is_git_repo(repo_root) else "workspace-scan"
 
-    files = _tracked_files(repo_root) if mode == "git-tracked" else list(_workspace_files(repo_root))
+    files = _tracked_files(repo_root) if mode.startswith("git-tracked") else list(_workspace_files(repo_root))
 
     findings: list[Finding] = []
     findings.extend(_scan_gitignore(repo_root))

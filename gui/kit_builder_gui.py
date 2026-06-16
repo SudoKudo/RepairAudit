@@ -4,20 +4,33 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 import tkinter as tk
 from tkinter import messagebox, ttk
+from urllib.parse import urlparse
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPERTISE_AREAS_PATH = REPO_ROOT / "tools" / "domain_classification" / "expertise_areas.jsonl"
 DEFAULT_KIT_SOURCE_PATH = "data/datasets/classified/dataset_classified.csv"
+LOCAL_LLM_BASE_URL = "http://127.0.0.1:11434"
+KIT_BUILDER_CACHE_PATH = REPO_ROOT / "gui" / ".cache" / "kit_builder_state.json"
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.participant_kit import build_participant_kit  # noqa: E402
+from scripts.participant_kit import (  # noqa: E402
+    PARTICIPANT_OS_LABELS,
+    build_participant_kit,
+)
+
+
+PARTICIPANT_OS_VALUES = list(PARTICIPANT_OS_LABELS)
+PARTICIPANT_OS_DISPLAY_NAMES = [PARTICIPANT_OS_LABELS[key] for key in PARTICIPANT_OS_VALUES]
+PARTICIPANT_OS_LABEL_TO_VALUE = {PARTICIPANT_OS_LABELS[key]: key for key in PARTICIPANT_OS_VALUES}
+PARTICIPANT_OS_VALUE_TO_LABEL = {key: PARTICIPANT_OS_LABELS[key] for key in PARTICIPANT_OS_VALUES}
 
 
 def _load_expertise_labels(path: Path) -> list[str]:
@@ -45,6 +58,18 @@ def _load_expertise_labels(path: Path) -> list[str]:
     return labels
 
 
+def _clean_text(value: object) -> str:
+    """Normalize one value into trimmed text for small config fields."""
+    return str(value or "").strip()
+
+
+def _llm_endpoint_is_local(base_url: str) -> bool:
+    """Treat blank, localhost, and loopback endpoints as local-only targets."""
+    parsed = urlparse(_clean_text(base_url))
+    host = (parsed.hostname or "").strip().lower()
+    return host in {"", "127.0.0.1", "localhost", "0.0.0.0", "::1"}
+
+
 class KitBuilderGUI(tk.Tk):
     """Tkinter window that creates one or more participant kits."""
 
@@ -70,6 +95,9 @@ class KitBuilderGUI(tk.Tk):
 
         self.configure(bg=self._bg)
         self.option_add("*Font", "{Segoe UI} 10")
+        self._session_state_path = KIT_BUILDER_CACHE_PATH
+        self._restoring_state = False
+        initial_state = self._read_session_state()
 
         self.out_root_var = tk.StringVar(value="participant_kits")
         self.metadata_var = tk.StringVar(value=DEFAULT_KIT_SOURCE_PATH)
@@ -78,8 +106,10 @@ class KitBuilderGUI(tk.Tk):
         self.condition_var = tk.StringVar(value="security")
         self.phase_var = tk.StringVar(value="pilot")
         self.study_id_var = tk.StringVar(value="repairaudit-v1")
+        self.participant_os_var = tk.StringVar(value=PARTICIPANT_OS_VALUE_TO_LABEL["windows"])
         self.provider_var = tk.StringVar(value="ollama")
-        self.model_var = tk.StringVar(value="qwen2.5-coder:7b-instruct")
+        self.model_var = tk.StringVar(value="qwen3.6:27b")
+        self.base_url_var = tk.StringVar(value=self._initial_base_url(initial_state))
         self.expertise_labels = _load_expertise_labels(EXPERTISE_AREAS_PATH)
         self.expertise_vars = {label: tk.BooleanVar(value=False) for label in self.expertise_labels}
 
@@ -91,7 +121,171 @@ class KitBuilderGUI(tk.Tk):
 
         self._configure_styles()
         self._build_ui()
+        self._restore_state_into_form(initial_state)
+        self._register_state_watchers()
         self._refresh_preview()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _initial_base_url(self, state: dict[str, Any]) -> str:
+        """Choose the startup endpoint without hard-coding transient tunnel URLs."""
+        override = _clean_text(os.getenv("REPAIRAUDIT_LLM_BASE_URL"))
+        if override:
+            return override
+
+        form_obj = state.get("form")
+        form = form_obj if isinstance(form_obj, dict) else {}
+        saved_base_url = _clean_text(form.get("base_url"))
+        if saved_base_url and not _llm_endpoint_is_local(saved_base_url):
+            return saved_base_url
+
+        last_kit_base_url = self._last_non_local_kit_endpoint()
+        if last_kit_base_url:
+            return last_kit_base_url
+
+        if saved_base_url:
+            return saved_base_url
+        return LOCAL_LLM_BASE_URL
+
+    def _last_non_local_kit_endpoint(self) -> str:
+        """Reuse the most recent remote endpoint already stamped into a kit lock file."""
+        lock_paths = sorted(
+            (REPO_ROOT / "participant_kits").glob("*/study_config.lock.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for lock_path in lock_paths:
+            try:
+                data = json.loads(lock_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(data, dict):
+                continue
+            llm_obj = data.get("llm")
+            llm = llm_obj if isinstance(llm_obj, dict) else {}
+            base_url = _clean_text(llm.get("base_url"))
+            if base_url and not _llm_endpoint_is_local(base_url):
+                return base_url
+        return ""
+
+    def _snapshot_form(self) -> dict[str, Any]:
+        """Capture only local operator GUI state needed for the next launch."""
+        return {
+            "out_root": self.out_root_var.get().strip(),
+            "metadata_csv": self.metadata_var.get().strip(),
+            "samples_per_hardness": int(self.samples_per_hardness_var.get()),
+            "selection_seed": int(self.selection_seed_var.get()),
+            "condition": self.condition_var.get().strip(),
+            "phase": self.phase_var.get().strip(),
+            "study_id": self.study_id_var.get().strip(),
+            "participant_os": PARTICIPANT_OS_LABEL_TO_VALUE.get(
+                self.participant_os_var.get().strip(),
+                self.participant_os_var.get().strip(),
+            ),
+            "provider": self.provider_var.get().strip(),
+            "model": self.model_var.get().strip(),
+            "base_url": self.base_url_var.get().strip(),
+            "base_name": self.base_name_var.get().strip(),
+            "count": int(self.count_var.get()),
+            "start_index": int(self.start_index_var.get()),
+            "pad_width": int(self.pad_width_var.get()),
+            "overwrite": bool(self.overwrite_var.get()),
+            "expertise_areas": self._selected_expertise_areas(),
+        }
+
+    def _write_session_state(self) -> None:
+        """Persist builder form values to the local GUI cache."""
+        if self._restoring_state:
+            return
+        try:
+            payload = {"form": self._snapshot_form()}
+            self._session_state_path.parent.mkdir(parents=True, exist_ok=True)
+            self._session_state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception:
+            # GUI cache should never block local kit generation.
+            pass
+
+    def _read_session_state(self) -> dict[str, Any]:
+        """Read cached builder state from disk when it exists."""
+        if not self._session_state_path.exists():
+            return {}
+        try:
+            data = json.loads(self._session_state_path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _restore_state_into_form(self, state: dict[str, Any]) -> None:
+        """Restore cached builder inputs without overwriting a newer remote endpoint."""
+        form_obj = state.get("form")
+        form = form_obj if isinstance(form_obj, dict) else {}
+        if not form:
+            return
+
+        self._restoring_state = True
+        try:
+            self.out_root_var.set(str(form.get("out_root", self.out_root_var.get())))
+            self.metadata_var.set(str(form.get("metadata_csv", self.metadata_var.get())))
+            self.samples_per_hardness_var.set(int(form.get("samples_per_hardness", self.samples_per_hardness_var.get())))
+            self.selection_seed_var.set(int(form.get("selection_seed", self.selection_seed_var.get())))
+            self.condition_var.set(str(form.get("condition", self.condition_var.get())))
+            self.phase_var.set(str(form.get("phase", self.phase_var.get())))
+            self.study_id_var.set(str(form.get("study_id", self.study_id_var.get())))
+            participant_os = str(form.get("participant_os", self.participant_os_var.get()))
+            if participant_os in PARTICIPANT_OS_VALUES:
+                self.participant_os_var.set(PARTICIPANT_OS_VALUE_TO_LABEL[participant_os])
+            elif participant_os in PARTICIPANT_OS_LABEL_TO_VALUE:
+                self.participant_os_var.set(participant_os)
+            self.provider_var.set(str(form.get("provider", self.provider_var.get())))
+            self.model_var.set(str(form.get("model", self.model_var.get())))
+
+            cached_base_url = _clean_text(form.get("base_url"))
+            if cached_base_url and not _llm_endpoint_is_local(self.base_url_var.get()):
+                pass
+            elif cached_base_url:
+                self.base_url_var.set(cached_base_url)
+
+            self.base_name_var.set(str(form.get("base_name", self.base_name_var.get())))
+            self.count_var.set(int(form.get("count", self.count_var.get())))
+            self.start_index_var.set(int(form.get("start_index", self.start_index_var.get())))
+            self.pad_width_var.set(int(form.get("pad_width", self.pad_width_var.get())))
+            self.overwrite_var.set(bool(form.get("overwrite", self.overwrite_var.get())))
+
+            selected_obj = form.get("expertise_areas")
+            selected = {str(label) for label in selected_obj} if isinstance(selected_obj, list) else set()
+            for label, var in self.expertise_vars.items():
+                var.set(label in selected)
+        except Exception:
+            pass
+        finally:
+            self._restoring_state = False
+
+    def _register_state_watchers(self) -> None:
+        """Save operator choices as they change so relaunches keep the same endpoint."""
+        tracked_vars: list[tk.Variable] = [
+            self.out_root_var,
+            self.metadata_var,
+            self.samples_per_hardness_var,
+            self.selection_seed_var,
+            self.condition_var,
+            self.phase_var,
+            self.study_id_var,
+            self.participant_os_var,
+            self.provider_var,
+            self.model_var,
+            self.base_url_var,
+            self.base_name_var,
+            self.count_var,
+            self.start_index_var,
+            self.pad_width_var,
+            self.overwrite_var,
+            *self.expertise_vars.values(),
+        ]
+        for var in tracked_vars:
+            var.trace_add("write", self._on_state_var_changed)
+
+    def _on_state_var_changed(self, *_args: str) -> None:
+        """Handle Tk variable updates in one place."""
+        self._write_session_state()
 
     def _configure_styles(self) -> None:
         """Configure ttk styles shared across the kit builder layout."""
@@ -124,10 +318,37 @@ class KitBuilderGUI(tk.Tk):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
-        root = ttk.Frame(self, style="Root.TFrame", padding=12)
-        root.grid(row=0, column=0, sticky="nsew")
+        shell = ttk.Frame(self, style="Root.TFrame")
+        shell.grid(row=0, column=0, sticky="nsew")
+        shell.columnconfigure(0, weight=1)
+        shell.rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(shell, background=self._bg, highlightthickness=0, bd=0)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(shell, orient="vertical", command=canvas.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        root = ttk.Frame(canvas, style="Root.TFrame", padding=12)
+        canvas_window = canvas.create_window((0, 0), window=root, anchor="nw")
         root.columnconfigure(0, weight=1)
-        root.rowconfigure(3, weight=1)
+
+        root.bind(
+            "<Configure>",
+            lambda _event: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda event: canvas.itemconfigure(canvas_window, width=event.width),
+        )
+        canvas.bind(
+            "<MouseWheel>",
+            lambda event: canvas.yview_scroll(int(-event.delta / 120), "units"),
+        )
+        self.bind_all(
+            "<MouseWheel>",
+            lambda event: canvas.yview_scroll(int(-event.delta / 120), "units"),
+        )
 
         header_card = tk.Frame(root, bg=self._panel, highlightbackground=self._border, highlightthickness=1, bd=0)
         header_card.grid(row=0, column=0, sticky="ew", pady=(0, 10))
@@ -145,21 +366,23 @@ class KitBuilderGUI(tk.Tk):
 
         ttk.Label(form, text="Core study settings used for every generated participant kit.", style="Hint.TLabel").grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
         self._row_entry(form, 1, "Output Folder", self.out_root_var, column_offset=0)
-        self._row_combo(form, 1, "Condition", self.condition_var, ["security", "productivity"], column_offset=2)
+        self._row_combo(form, 1, "Condition", self.condition_var, ["security"], column_offset=2)
         self._row_entry(form, 2, "Source CSV", self.metadata_var, column_offset=0)
         self._row_combo(form, 2, "Phase", self.phase_var, ["pilot", "main", "self_test"], column_offset=2)
         self._row_entry(form, 3, "Study ID", self.study_id_var, column_offset=0)
-        self._row_entry(form, 3, "LLM Provider", self.provider_var, column_offset=2)
+        self._row_combo(form, 3, "Participant OS", self.participant_os_var, PARTICIPANT_OS_DISPLAY_NAMES, column_offset=2)
         self._row_spin_inline(form, 4, "Samples / Hardness", self.samples_per_hardness_var, 1, 10, column_offset=0)
         self._row_spin_inline(form, 4, "Selection Seed", self.selection_seed_var, 0, 999999, column_offset=2)
-        self._row_entry(form, 5, "LLM Model", self.model_var, column_offset=0, columnspan=3)
+        self._row_entry(form, 5, "LLM Provider", self.provider_var, column_offset=0)
+        self._row_entry(form, 5, "LLM Model", self.model_var, column_offset=2)
+        self._row_entry(form, 6, "LLM Endpoint URL", self.base_url_var, column_offset=0, columnspan=3)
         ttk.Label(
             form,
-            text="Dataset kits draw 3 low, 3 medium, and 3 high snippets, then backfill within a difficulty bucket if expertise matches run short.",
+            text="Dataset kits draw 3 low, 3 medium, and 3 high snippets, then backfill within a difficulty bucket if expertise matches run short. Each kit only includes the launcher for the selected participant OS.",
             style="Hint.TLabel",
             wraplength=760,
             justify="left",
-        ).grid(row=6, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ).grid(row=7, column=0, columnspan=4, sticky="w", pady=(6, 0))
 
         expertise = ttk.LabelFrame(root, text="Expertise Areas", style="Card.TLabelframe", padding=12)
         expertise.grid(row=2, column=0, sticky="ew", pady=(8, 0))
@@ -188,9 +411,8 @@ class KitBuilderGUI(tk.Tk):
             ).grid(row=row, column=column, sticky="w", pady=2, padx=(0, 12))
 
         naming = ttk.LabelFrame(root, text="Participant Naming", style="Card.TLabelframe", padding=12)
-        naming.grid(row=3, column=0, sticky="nsew", pady=(8, 0))
+        naming.grid(row=3, column=0, sticky="ew", pady=(8, 0))
         naming.columnconfigure(1, weight=1)
-        naming.rowconfigure(7, weight=1)
 
         ttk.Label(naming, text="Preview the exact participant IDs before creating kit folders.", style="Hint.TLabel").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
         self._row_entry(naming, 1, "Base Name", self.base_name_var, on_change=self._refresh_preview)
@@ -209,7 +431,7 @@ class KitBuilderGUI(tk.Tk):
         self.preview_box.configure(state="disabled")
 
         actions = ttk.Frame(root, style="Root.TFrame")
-        actions.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        actions.grid(row=4, column=0, sticky="ew", pady=(10, 0))
         actions.columnconfigure(0, weight=1)
 
         ttk.Label(actions, text="Refresh the preview before creating kits. Existing folders are blocked unless overwrite is enabled.", style="Hint.TLabel", wraplength=760, justify="left").grid(row=0, column=0, sticky="w")
@@ -295,6 +517,7 @@ class KitBuilderGUI(tk.Tk):
         self.preview_box.delete("1.0", tk.END)
         self.preview_box.insert("1.0", text)
         self.preview_box.configure(state="disabled")
+        self._write_session_state()
 
     def _validate_before_create(self, participant_ids: list[str]) -> list[str]:
         """Return a list of conflicting IDs that already exist on disk."""
@@ -319,12 +542,18 @@ class KitBuilderGUI(tk.Tk):
                 raise FileExistsError("The following participant kit IDs already exist.\n\n" f"{listed}\n\n" "Change naming settings or enable overwrite.")
             created: list[str] = []
             for pid in participant_ids:
-                args = argparse.Namespace(participant_id=pid, condition=self.condition_var.get().strip(), phase=self.phase_var.get().strip(), metadata_csv=str(metadata_csv), expertise_areas=", ".join(self._selected_expertise_areas()), samples_per_hardness=int(self.samples_per_hardness_var.get()), selection_seed=int(self.selection_seed_var.get()), out_root=str(out_root), study_id=self.study_id_var.get().strip(), llm_provider=self.provider_var.get().strip(), llm_model=self.model_var.get().strip(), temperature=0.2, top_p=0.9, top_k=40, num_predict=1200, seed=42, overwrite=bool(self.overwrite_var.get()))
+                args = argparse.Namespace(participant_id=pid, condition=self.condition_var.get().strip(), phase=self.phase_var.get().strip(), metadata_csv=str(metadata_csv), expertise_areas=", ".join(self._selected_expertise_areas()), samples_per_hardness=int(self.samples_per_hardness_var.get()), selection_seed=int(self.selection_seed_var.get()), out_root=str(out_root), study_id=self.study_id_var.get().strip(), participant_os=PARTICIPANT_OS_LABEL_TO_VALUE.get(self.participant_os_var.get().strip(), self.participant_os_var.get().strip()), llm_provider=self.provider_var.get().strip(), llm_model=self.model_var.get().strip(), llm_base_url=self.base_url_var.get().strip(), temperature=0.2, top_p=0.9, top_k=40, num_predict=1024, seed=42, overwrite=bool(self.overwrite_var.get()))
                 build_participant_kit(args)
                 created.append(pid)
+            self._write_session_state()
             messagebox.showinfo("Kits Created", "Created participant kits:\n\n" + "\n".join(created))
         except Exception as exc:
             messagebox.showerror("Creation Failed", str(exc))
+
+    def _on_close(self) -> None:
+        """Save the current form cache before closing the window."""
+        self._write_session_state()
+        self.destroy()
 
 
 def main() -> None:

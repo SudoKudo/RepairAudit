@@ -11,12 +11,14 @@ import csv
 import hashlib
 import json
 import random
+import re
 import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 HARDNESS_BUCKETS = ("low", "medium", "high")
 HARDNESS_ALIASES = {
@@ -38,6 +40,26 @@ LANGUAGE_EXTENSIONS = {
     "python": ".py",
     "ruby": ".rb",
     "typescript": ".ts",
+}
+PARTICIPANT_OS_ALIASES = {
+    "windows": "windows",
+    "win": "windows",
+    "mac": "macos",
+    "macos": "macos",
+    "darwin": "macos",
+    "osx": "macos",
+    "linux": "linux",
+    "ubuntu": "linux",
+}
+PARTICIPANT_OS_LABELS = {
+    "windows": "Windows",
+    "macos": "macOS",
+    "linux": "Linux",
+}
+PARTICIPANT_OS_LAUNCHERS = {
+    "windows": "Launch_Study_Web_App.bat",
+    "macos": "Launch_Study_Web_App.sh",
+    "linux": "Launch_Study_Web_App.sh",
 }
 
 
@@ -99,6 +121,18 @@ def _normalize_hardness(value: Any) -> str:
     return normalized
 
 
+def _normalize_participant_os(value: Any) -> str:
+    """Map CLI/GUI OS text onto the supported launcher targets."""
+    text = _clean_text(value).casefold()
+    normalized = PARTICIPANT_OS_ALIASES.get(text)
+    if not normalized:
+        raise ValueError(
+            "Unsupported participant_os value: "
+            f"{value!r}. Use one of {sorted(PARTICIPANT_OS_LABELS)}."
+        )
+    return normalized
+
+
 def _parse_secondary_expertise(raw_value: Any) -> list[str]:
     """Parse the serialized secondary expertise list from the dataset."""
     text = _clean_text(raw_value)
@@ -137,6 +171,171 @@ def _dataset_output_name(row: dict[str, str]) -> str:
     if hint:
         return f"{sample_id}_{hint}{suffix}"
     return f"{sample_id}{suffix}"
+
+
+def _snippet_extension(row: dict[str, str]) -> str:
+    """Resolve the source-language file extension used for a participant snippet."""
+    source_kind = _clean_text(row.get("source_kind", "")).casefold()
+    if source_kind == "dataset":
+        return _dataset_extension(row)
+    baseline_path = Path(_clean_text(row.get("baseline_relpath", "")))
+    if baseline_path.suffix:
+        return baseline_path.suffix
+    return ".txt"
+
+
+def _build_participant_snippet_mappings(
+    rows: list[dict[str, str]],
+) -> tuple[list[dict[str, str]], dict[str, str], dict[str, str]]:
+    """Assign participant-safe IDs, file names, and labels without exposing source identifiers."""
+    participant_rows: list[dict[str, str]] = []
+    snippet_files: dict[str, str] = {}
+    snippet_labels: dict[str, str] = {}
+    for index, row in enumerate(rows, start=1):
+        source_snippet_id = row["snippet_id"]
+        participant_snippet_id = f"S{index:02d}"
+        extension = _snippet_extension(row)
+        participant_filename = f"snippet_{index:02d}{extension}"
+        participant_label = f"Snippet {index}"
+
+        copied = dict(row)
+        copied["source_snippet_id"] = source_snippet_id
+        copied["snippet_id"] = participant_snippet_id
+        copied["participant_filename"] = participant_filename
+        copied["participant_label"] = participant_label
+        participant_rows.append(copied)
+
+        snippet_files[participant_snippet_id] = participant_filename
+        snippet_labels[participant_snippet_id] = participant_label
+    return participant_rows, snippet_files, snippet_labels
+
+
+def _decode_escaped_newlines(text: str) -> str:
+    """Expand literal newline and tab escape sequences found in flattened dataset rows."""
+    if "\n" in text or "\\n" not in text:
+        return text
+    return (
+        text.replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\t", "    ")
+    )
+
+
+def _format_flat_c_like_code(text: str) -> str:
+    """Make one-line brace-and-semicolon code samples readable without changing their tokens."""
+    raw_lines: list[str] = []
+    token: list[str] = []
+    in_string = ""
+    escaping = False
+    index = 0
+    length = len(text)
+
+    while index < length:
+        ch = text[index]
+
+        if not in_string and text.startswith("/*", index):
+            piece = "".join(token).strip()
+            if piece:
+                raw_lines.append(piece)
+            token = []
+            end = text.find("*/", index + 2)
+            if end == -1:
+                raw_lines.append(text[index:].strip())
+                break
+            raw_lines.append(text[index : end + 2].strip())
+            index = end + 2
+            continue
+
+        if not in_string and text.startswith("//", index):
+            piece = "".join(token).strip()
+            if piece:
+                raw_lines.append(piece)
+            token = []
+            end = text.find("\n", index + 2)
+            if end == -1:
+                raw_lines.append(text[index:].strip())
+                break
+            raw_lines.append(text[index:end].strip())
+            index = end
+            continue
+
+        token.append(ch)
+        if in_string:
+            if escaping:
+                escaping = False
+                index += 1
+                continue
+            if ch == "\\":
+                escaping = True
+                index += 1
+                continue
+            if ch == in_string:
+                in_string = ""
+            index += 1
+            continue
+
+        if ch in {'"', "'"}:
+            in_string = ch
+            index += 1
+            continue
+
+        if ch in {"{", "}", ";"}:
+            piece = "".join(token).strip()
+            if piece:
+                raw_lines.append(piece)
+            token = []
+            index += 1
+            continue
+
+        index += 1
+
+    tail = "".join(token).strip()
+    if tail:
+        raw_lines.append(tail)
+
+    indent = 0
+    lines: list[str] = []
+    for raw_line in raw_lines:
+        line = re.sub(r"\s+", " ", raw_line.strip())
+        if not line:
+            continue
+        if line.startswith("}"):
+            indent = max(0, indent - 1)
+        lines.append(("    " * indent) + line)
+        opens = line.count("{")
+        closes = line.count("}")
+        if opens > closes:
+            indent += opens - closes
+        elif closes > opens and not line.startswith("}"):
+            indent = max(0, indent - (closes - opens))
+    return "\n".join(lines)
+
+
+def _normalize_code_sample(text: str, language: str) -> str:
+    """Clean and lightly format dataset-backed baseline code before it reaches participants."""
+    normalized = _decode_escaped_newlines(text).replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not normalized:
+        return ""
+
+    language_key = language.casefold()
+    c_like_languages = {
+        "c",
+        "c#",
+        "cpp",
+        "c++",
+        "go",
+        "java",
+        "javascript",
+        "php",
+        "typescript",
+    }
+    if "\n" not in normalized and language_key in c_like_languages:
+        normalized = _format_flat_c_like_code(normalized)
+
+    if "\n" not in normalized and ";" in normalized and language_key == "python":
+        normalized = normalized.replace("; ", ";\n")
+
+    return normalized + "\n"
 
 
 def _selection_rng(participant_id: str, selection_seed: int) -> random.Random:
@@ -313,17 +512,6 @@ def _load_snippets(
     )
 
 
-def _snippet_output_name(row: dict[str, str]) -> str:
-    """Return the participant-visible filename for one snippet artifact."""
-    output_name = _clean_text(row.get("output_name"))
-    if output_name:
-        return output_name
-    base = Path(row["baseline_relpath"])
-    if base.name:
-        return base.name
-    return f'{row["snippet_id"]}.txt'
-
-
 def _sha256_file(path: Path) -> str:
     """Return SHA-256 hash of a file for reproducibility manifests."""
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -332,6 +520,15 @@ def _sha256_file(path: Path) -> str:
 def _sha256_text(text: str) -> str:
     """Return SHA-256 hash of a UTF-8 string payload."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _public_source_csv_ref(source_csv: Path, repo_root: Path) -> str:
+    """Return a participant-safe source reference without leaking a local absolute path."""
+    try:
+        rel_path = source_csv.resolve().relative_to(repo_root.resolve())
+        return rel_path.as_posix()
+    except Exception:
+        return source_csv.name
 
 
 def _git_head_sha(repo_root: Path) -> str:
@@ -348,14 +545,23 @@ def _git_head_sha(repo_root: Path) -> str:
         return ""
 
 
-def _write_kit_manifest(*, kit_dir: Path, source_csv: Path, lock_payload: dict[str, Any], snippet_files: dict[str, str]) -> None:
+def _write_kit_manifest(
+    *,
+    kit_dir: Path,
+    source_csv: Path,
+    lock_payload: dict[str, Any],
+    snippet_files: dict[str, str],
+    participant_os: str,
+) -> None:
     """Write a local reproducibility manifest without participant results or logs."""
     repo_root = Path(__file__).resolve().parents[1]
     config_path = repo_root / "config.yaml"
     manifest = {
         "generated_utc": _participant_timestamp(),
         "repo_commit": _git_head_sha(repo_root),
-        "source_csv": str(source_csv),
+        "participant_os": participant_os,
+        "launcher_file": PARTICIPANT_OS_LAUNCHERS[participant_os],
+        "source_csv": _public_source_csv_ref(source_csv, repo_root),
         "source_csv_sha256": _sha256_file(source_csv) if source_csv.exists() else "",
         "config_yaml_sha256": _sha256_file(config_path) if config_path.exists() else "",
         "study_config_lock_sha256": _sha256_text(json.dumps(lock_payload, sort_keys=True)),
@@ -364,16 +570,41 @@ def _write_kit_manifest(*, kit_dir: Path, source_csv: Path, lock_payload: dict[s
     (kit_dir / "kit_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
-def _write_selected_snippet_source(path: Path, rows: list[dict[str, str]]) -> None:
-    """Write the selected snippet rows into the run folder for later replay."""
-    if not rows:
-        return
-    fieldnames = sorted({key for row in rows for key in row.keys()})
-    with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({key: row.get(key, "") for key in fieldnames})
+def _write_researcher_assignment(
+    *,
+    path: Path,
+    participant_id: str,
+    condition: str,
+    phase: str,
+    participant_os: str,
+    source_csv: Path,
+    source_kind: str,
+    expertise_areas: list[str],
+    samples_per_hardness: int,
+    selection_seed: int,
+    rows: list[dict[str, str]],
+) -> None:
+    """Write a local-only researcher map that links participant-safe IDs back to the source rows."""
+    payload = {
+        "generated_utc": _participant_timestamp(),
+        "participant_id": participant_id,
+        "condition": condition,
+        "phase": phase,
+        "participant_os": participant_os,
+        "source_kind": source_kind,
+        "source_csv": str(source_csv),
+        "expertise_areas": expertise_areas,
+        "samples_per_hardness": samples_per_hardness,
+        "selection_seed": selection_seed,
+        "snippet_mappings": rows,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _researcher_map_name(phase: str, participant_id: str) -> str:
+    """Return the stable local map filename used after submissions are imported into runs/<phase>/<participant_id>/."""
+    return f"{phase}__{participant_id}.json"
 
 
 def _write_participant_log_template(log_csv: Path, snippet_ids: list[str], model_name: str) -> None:
@@ -448,46 +679,97 @@ def _parse_expertise_args(value: Any) -> list[str]:
         ordered.append(label)
     return ordered
 
+
+def _llm_endpoint_is_local(base_url: str) -> bool:
+    """Return True when the configured LLM endpoint resolves to localhost."""
+    parsed = urlparse(_clean_text(base_url))
+    host = (parsed.hostname or "").strip().lower()
+    return host in {"", "127.0.0.1", "localhost", "::1"}
+
+
 def _write_participant_readme(
     *,
     path: Path,
-    participant_id: str,
-    condition: str,
-    phase: str,
     model_name: str,
-    run_dir_name: str,
-    expertise_areas: list[str],
+    llm_base_url: str,
+    participant_os: str,
 ) -> None:
     """Write short launch/troubleshooting instructions for participants."""
-    expertise_lines = ""
-    if expertise_areas:
-        expertise_lines = f"- Assigned expertise areas: `{', '.join(expertise_areas)}`\n"
+    launcher_name = PARTICIPANT_OS_LAUNCHERS[participant_os]
+    launcher_step = (
+        f"1. On {PARTICIPANT_OS_LABELS[participant_os]}: double-click `{launcher_name}`."
+        if participant_os == "windows"
+        else f"1. On {PARTICIPANT_OS_LABELS[participant_os]}: run `bash {launcher_name}` from a terminal in this folder."
+    )
+    uses_local_ollama = _llm_endpoint_is_local(llm_base_url)
+    if uses_local_ollama:
+        setup_lines = "\n".join(
+            [
+                "1. Make sure Python is installed on the machine that will run this kit. The kit uses it only to start the app and package the return ZIP.",
+                "2. Install Ollama from [https://ollama.com/download](https://ollama.com/download).",
+                "3. Pull the assigned model once:",
+                f"   - `ollama pull {model_name}`",
+                "4. Start Ollama before opening the app:",
+                "   - `ollama serve`",
+                "5. Leave that terminal running while you work.",
+            ]
+        )
+        troubleshooting_lines = "\n".join(
+            [
+                "- If the app cannot reach the assistant, make sure `ollama serve` is still running.",
+                "- If the launcher says `py` or `python` is missing, install Python and run the launcher again.",
+                "- If the browser does not open automatically, use the localhost URL shown in the launcher window.",
+                "- If the app closes, reopen it from the same kit folder and continue there.",
+            ]
+        )
+        runtime_lines = "\n".join(
+            [
+                "- Use only the assistant built into this kit.",
+                f"- This kit is locked to `{model_name}`.",
+                "- Do not edit the kit files or switch to another assistant unless the research team told you to do that.",
+            ]
+        )
+    else:
+        setup_lines = "\n".join(
+            [
+                "1. Make sure Python is installed on the machine that will run this kit. The kit uses it only to start the app and package the return ZIP.",
+                "2. Make sure this machine can reach the assigned LLM endpoint before you begin.",
+                "3. If your network setup requires VPN access, connect before launching the kit.",
+                "4. You do not need to install a local model on this machine.",
+                "5. Leave the endpoint settings in the kit as they are.",
+            ]
+        )
+        troubleshooting_lines = "\n".join(
+            [
+                "- If the app cannot reach the assigned LLM endpoint, confirm that your network or VPN connection is active.",
+                "- If the launcher says `py` or `python` is missing, install Python and run the launcher again.",
+                "- If the browser does not open automatically, use the localhost URL shown in the launcher window.",
+                "- If the app closes, reopen it from the same kit folder and continue there.",
+            ]
+        )
+        runtime_lines = "\n".join(
+            [
+                "- Use only the assistant built into this kit.",
+                "- You do not need to choose a model or edit the endpoint yourself.",
+                "- Do not edit the kit files or switch to another assistant unless the research team told you to do that.",
+            ]
+        )
     content = f"""# RepairAudit Participant Kit
 
-Use the participant app for all task instructions. This README only covers setup, launch, and submission.
+This folder contains the app, the locked settings, and the packager used to return your work. Use the browser app for the study instructions.
 
 ## 1) Before You Start
-1. Make sure Python is installed on the machine that will run this kit. It is only needed to launch the local app and packaging tools.
-2. Install Ollama from [https://ollama.com/download](https://ollama.com/download).
-3. Pull the assigned model once:
-   - `ollama pull {model_name}`
-4. Start Ollama before opening the app:
-   - `ollama serve`
-5. Keep Ollama running while you complete the study.
+{setup_lines}
 
 ## 2) Start The App
-1. On Windows: double-click `Launch_Study_Web_App.bat`.
-2. On macOS/Linux: run `bash Launch_Study_Web_App.sh` from a terminal in this folder.
+{launcher_step}
+2. This kit only includes the launcher for the machine it was prepared for.
 3. Keep the command window or terminal open while you work.
-4. The browser app should open automatically. If it does not, copy the localhost URL shown in the launcher window into your browser.
-5. Complete the participant profile in the app, review the onboarding, and click **Begin Study** to start.
+4. The browser app should open on its own. If it does not, copy the localhost URL shown in the launcher window into your browser.
+5. Complete the participant profile, read the onboarding page, and click **Begin Study**.
 
-## 3) Assigned Configuration
-- Participant ID: `{participant_id}`
-- Condition: `{condition}`
-- Phase: `{phase}`
-- Assigned model: `{model_name}`
-{expertise_lines}
+## 3) In-App Assistant
+{runtime_lines}
 
 ## 4) Finish And Return
 1. Complete all assigned snippets in the app.
@@ -496,13 +778,10 @@ Use the participant app for all task instructions. This README only covers setup
 4. Send that ZIP back to the research team.
 
 ## 5) Troubleshooting
-- If the app cannot connect to Ollama, make sure `ollama serve` is still running.
-- If the launcher says `py` or `python` is missing, install Python and run the launcher again.
-- If the browser does not open automatically, use the localhost URL shown in the launcher window.
-- If the app closes unexpectedly, reopen it with the launcher and continue in the same kit folder.
+{troubleshooting_lines}
 
 ## 6) Privacy Reminder
-Do not include personal identifiers or sensitive account data in prompts, code comments, or notes.
+Do not put personal identifiers or sensitive account data into prompts, code comments, or notes.
 """
     path.write_text(content, encoding="utf-8")
 
@@ -742,9 +1021,8 @@ if __name__ == "__main__":
     path.write_text(script, encoding="utf-8")
 
 
-
-def _write_participant_launchers(*, kit_dir: Path) -> None:
-    """Write platform launchers that start the participant app."""
+def _write_participant_launcher(*, kit_dir: Path, participant_os: str) -> None:
+    """Write only the launcher needed for the participant's operating system."""
     launcher_bat = r"""@echo off
 setlocal
 cd /d %~dp0
@@ -775,11 +1053,16 @@ else
   python participant_web_app.py
 fi
 """
-    (kit_dir / "Launch_Study_Web_App.bat").write_text(launcher_bat, encoding="utf-8")
+    if participant_os == "windows":
+        (kit_dir / "Launch_Study_Web_App.bat").write_text(launcher_bat, encoding="utf-8")
+        return
     (kit_dir / "Launch_Study_Web_App.sh").write_text(launcher_sh, encoding="utf-8")
+
+
 def build_participant_kit(args: argparse.Namespace) -> None:
     """Build a locked participant kit with baseline snippets and submission helpers."""
     source_csv = Path(args.metadata_csv)
+    participant_os = _normalize_participant_os(getattr(args, "participant_os", "windows"))
     expertise_areas = _parse_expertise_args(getattr(args, "expertise_areas", ""))
     samples_per_hardness = int(getattr(args, "samples_per_hardness", 3))
     selection_seed = int(getattr(args, "selection_seed", 42))
@@ -791,8 +1074,9 @@ def build_participant_kit(args: argparse.Namespace) -> None:
         samples_per_hardness=samples_per_hardness,
         selection_seed=selection_seed,
     )
+    participant_rows, snippet_files, snippet_labels = _build_participant_snippet_mappings(snippets)
+    snippets = participant_rows
     snippet_ids = [row["snippet_id"] for row in snippets]
-    snippet_files = {row["snippet_id"]: _snippet_output_name(row) for row in snippets}
     source_kind = _clean_text(snippets[0].get("source_kind", "metadata")) or "metadata"
 
     out_root = Path(args.out_root)
@@ -820,7 +1104,10 @@ def build_participant_kit(args: argparse.Namespace) -> None:
         (run_dir / "edits" / output_name).write_text("", encoding="utf-8")
         if source_kind == "dataset":
             (run_dir / "baseline" / output_name).write_text(
-                _clean_text(row.get("code_sample", "")),
+                _normalize_code_sample(
+                    _clean_text(row.get("code_sample", "")),
+                    _clean_text(row.get("language", "")),
+                ),
                 encoding="utf-8",
             )
         else:
@@ -830,7 +1117,6 @@ def build_participant_kit(args: argparse.Namespace) -> None:
             shutil.copy2(src, run_dir / "baseline" / output_name)
 
     (run_dir / "condition.txt").write_text(args.condition.strip() + "\n", encoding="utf-8")
-    _write_selected_snippet_source(run_dir / "snippet_source.csv", snippets)
     (run_dir / "study_assignment.json").write_text(
         json.dumps(
             {
@@ -838,11 +1124,14 @@ def build_participant_kit(args: argparse.Namespace) -> None:
                 "participant_id": args.participant_id,
                 "condition": args.condition,
                 "phase": args.phase,
+                "participant_os": participant_os,
                 "source_kind": source_kind,
-                "source_csv": str(source_csv),
                 "expertise_areas": expertise_areas,
                 "samples_per_hardness": samples_per_hardness,
                 "selection_seed": selection_seed,
+                "snippet_ids": snippet_ids,
+                "snippet_files": snippet_files,
+                "snippet_labels": snippet_labels,
             },
             indent=2,
         ),
@@ -881,11 +1170,12 @@ def build_participant_kit(args: argparse.Namespace) -> None:
         "condition": args.condition,
         "phase": args.phase,
         "generated_utc": _participant_timestamp(),
+        "participant_os": participant_os,
         "snippet_ids": snippet_ids,
         "snippet_files": snippet_files,
+        "snippet_labels": snippet_labels,
         "snippet_source": {
             "kind": source_kind,
-            "csv": str(source_csv),
             "expertise_areas": expertise_areas,
             "samples_per_hardness": samples_per_hardness,
             "selection_seed": selection_seed,
@@ -893,6 +1183,7 @@ def build_participant_kit(args: argparse.Namespace) -> None:
         "llm": {
             "provider": args.llm_provider,
             "model": args.llm_model,
+            "base_url": _clean_text(getattr(args, "llm_base_url", "http://127.0.0.1:11434")) or "http://127.0.0.1:11434",
             "temperature": args.temperature,
             "top_p": args.top_p,
             "top_k": args.top_k,
@@ -911,16 +1202,28 @@ def build_participant_kit(args: argparse.Namespace) -> None:
         source_csv=source_csv,
         lock_payload=locked_config,
         snippet_files=snippet_files,
+        participant_os=participant_os,
+    )
+    repo_root = Path(__file__).resolve().parents[1]
+    _write_researcher_assignment(
+        path=repo_root / "participant_kits" / "_researcher_maps" / _researcher_map_name(args.phase, args.participant_id),
+        participant_id=args.participant_id,
+        condition=args.condition,
+        phase=args.phase,
+        participant_os=participant_os,
+        source_csv=source_csv,
+        source_kind=source_kind,
+        expertise_areas=expertise_areas,
+        samples_per_hardness=samples_per_hardness,
+        selection_seed=selection_seed,
+        rows=snippets,
     )
 
     _write_participant_readme(
         path=kit_dir / "README.md",
-        participant_id=args.participant_id,
-        condition=args.condition,
-        phase=args.phase,
         model_name=args.llm_model,
-        run_dir_name=run_dir_name,
-        expertise_areas=expertise_areas,
+        llm_base_url=str(locked_config["llm"].get("base_url", "") or ""),
+        participant_os=participant_os,
     )
     _write_submission_packager(
         path=kit_dir / "package_submission.py",
@@ -933,7 +1236,7 @@ def build_participant_kit(args: argparse.Namespace) -> None:
     if not template_app.exists():
         raise FileNotFoundError(f"Missing participant app template: {template_app}")
     shutil.copy2(template_app, kit_dir / "participant_web_app.py")
-    _write_participant_launchers(kit_dir=kit_dir)
+    _write_participant_launcher(kit_dir=kit_dir, participant_os=participant_os)
 
     print("Participant kit created.")
     print(f"Kit: {kit_dir}")
@@ -954,6 +1257,8 @@ def clean_participant_kits(args: argparse.Namespace) -> None:
         print(f"No kits root found: {kits_root}")
         return
 
+    reserved_names = {"_researcher_maps", "__pycache__"}
+
     target_dirs: list[Path] = []
     participant_id = (args.participant_id or "").strip()
 
@@ -962,13 +1267,18 @@ def clean_participant_kits(args: argparse.Namespace) -> None:
 
     if participant_id:
         one = kits_root / participant_id
+        if one.name in reserved_names:
+            raise ValueError(f"Refusing to remove reserved internal folder: {one.name}")
         if one.exists() and one.is_dir():
             target_dirs = [one]
         else:
             print(f"No kit found for participant_id={participant_id} at {one}")
             return
     elif args.all:
-        target_dirs = sorted([d for d in kits_root.iterdir() if d.is_dir()], key=lambda p: p.name)
+        target_dirs = sorted(
+            [d for d in kits_root.iterdir() if d.is_dir() and d.name not in reserved_names],
+            key=lambda p: p.name,
+        )
     else:
         raise ValueError("Specify --participant_id <id> or --all.")
 

@@ -1,37 +1,35 @@
 # RepairAudit: Auditing Human-LLM Vulnerability Mitigation in Code Repair Workflows
 
-Repository for a controlled experiment on how people repair vulnerable code with LLM assistance.
+This repository holds the study pipeline, the participant-kit builder, and the analysis/reporting code for RepairAudit.
 
-This README is the operator and developer handbook for the full pipeline: kit generation, participant collection, analysis, aggregation, and reporting.
+Use this README as the working reference for setup, kit generation, submission ingest, analysis, and publish checks.
 
-## 1) What This Project Measures
-This pipeline evaluates whether participant edits:
+## 1) What The Repo Does
+The pipeline tracks what happens after a participant receives vulnerable code, works on it with the assigned LLM workflow, and returns a submission. The main outcome labels are:
 - mitigate vulnerabilities
 - preserve vulnerabilities
 - amplify risk
 - produce uncertainty/disagreement signals
 
-Vulnerability scope:
+Current checked-in vulnerability coverage:
 - SQL Injection (`CWE-89`)
 - Command Injection (`CWE-78`)
 
-Core study idea:
+In practice, the repo does five jobs:
 - baseline snippets are intentionally vulnerable starting points
-- participants review those snippets and submit repaired code with LLM assistance
-- results are judged by deterministic detectors plus optional LLM-as-a-judge
-- workflow telemetry is merged so security outcomes can be linked to behavior
+- participant kits package those snippets with the local web app and locked LLM settings
+- returned runs are analyzed with deterministic detectors and, if enabled, an LLM judge
+- interaction logs are merged into the per-snippet results
+- aggregate outputs and the HTML report are built from the imported runs
 
-Scope note:
-- the checked-in sample corpus currently includes Python, Java, C, and C++
-- the workflow is organized around snippet metadata and source-file paths so new datasets can extend to other programming languages without changing the participant/researcher split
+The checked-in sample corpus includes Python, Java, C, and C++. The dataset-driven kit flow is language-agnostic as long as the source CSV has the required columns.
 
 ## 2) Repository Layout
 ```text
 RepairAudit/
 |-- config.yaml                              # Runtime config (LLM judge model, strategies, generation options)
 |-- requirements.txt                         # Python dependencies
-|-- README.md                                # This researcher/operator/developer guide
-|-- Run_Privacy_Check.bat                    # One-click privacy pre-publish gate
+|-- README.md                                # Project setup, workflow, and publish checks
 |-- .gitignore                               # Prevents participant data/artifacts from accidental commit
 |
 |-- gui/
@@ -42,7 +40,7 @@ RepairAudit/
 |   |-- study_cli.py                         # Unified CLI entrypoint for all workflow stages
 |   |-- participant_kit.py                   # Kit builder and kit cleanup logic
 |   |-- participant_web_app_template.py      # Template copied into each kit as participant_web_app.py
-|   |-- privacy_check.py                     # Pre-publish privacy scanner used by CLI and BAT wrapper
+|   |-- privacy_check.py                     # Pre-publish privacy scanner used by the CLI and researcher GUI
 |   `-- __init__.py                          # Package marker
 |
 |-- tools/
@@ -102,19 +100,18 @@ py -3 -m venv .venv
 .venv\Scripts\activate
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
-If `py` is unavailable on your machine, use your installed Python launcher for
-that one environment-creation step. After the environment exists, use
-`.venv\Scripts\python.exe` for all project commands so the pipeline does not
-depend on global PATH state.
+If `py` is not available on your machine, use whatever Python launcher you already have for the venv creation step. After that, run project commands through `.venv\Scripts\python.exe` so results do not depend on a global PATH setup.
 
 Researcher-side judge requirement:
-- if `llm_judge.enabled` stays `true` in `config.yaml`, the analysis pipeline also expects a local Ollama server
-- pull the configured model and start Ollama before running `analyze-run`, the Study GUI, or any full aggregation workflow:
+- if `llm_judge.enabled` is left on in `config.yaml`, the analysis side expects a local Ollama server
+- pull the model named in `config.yaml` and start Ollama before running `analyze-run`, the Study GUI, or a full aggregation/report pass
+- the checked-in judge default is `qwen2.5-coder:7b-instruct`:
 ```powershell
 ollama pull qwen2.5-coder:7b-instruct
 ollama serve
 ```
 - if you do not want judge-backed scoring for a run, set `llm_judge.enabled: false` first
+- participant-kit defaults are separate from `llm_judge.model`; changing the kit model does not change researcher-side judge settings
 
 Dependencies in `requirements.txt`:
 - `bandit>=1.7.0`
@@ -125,7 +122,7 @@ Dependencies in `requirements.txt`:
 - `jinja2>=3.1.0`
 
 ## 3.1) GitHub Publish Checklist
-Before publishing this repository, remove or ignore generated study artifacts:
+Before pushing or sharing the repo, clear generated study artifacts:
 - `participant_kits/` contents
 - `runs/` contents
 - `data/aggregated/` outputs
@@ -134,14 +131,14 @@ Before publishing this repository, remove or ignore generated study artifacts:
 - `tmp_*/` scratch folders
 - root helper scripts prefixed with `_`
 
-The tracked repository should contain source, metadata, snippets, config, and documentation. Participant data, generated kits, and analysis outputs should remain local-only.
+Tracked content should be limited to source, configs, metadata, snippets, tests, and docs. Participant data, generated kits, and analysis outputs should stay local.
 
 Note:
 - `.venv/` or `venv/` is a local-only environment and is intentionally gitignored.
 - `gui/.cache/` stores local Study GUI session state and is intentionally gitignored.
 
 ## 4) Pipeline Flow
-Researcher flow:
+Normal researcher flow:
 1. Prepare or refresh the classified dataset used for kit sampling.
 2. Generate participant kits.
 3. Distribute kits.
@@ -154,7 +151,7 @@ Researcher flow:
 10. Compute snippet-level models.
 11. Build HTML report.
 
-One-command map (high level):
+High-level command map:
 ```powershell
 .venv\Scripts\python.exe -m scripts.study_cli build-participant-kit ...
 .venv\Scripts\python.exe -m scripts.study_cli analyze-run ...
@@ -166,7 +163,7 @@ One-command map (high level):
 ```
 
 ## 5) CLI Command Map
-Use the GUI first when possible. The CLI remains available for scripted or manual execution.
+Use the GUIs when you want a researcher-facing control surface. Use the CLI when you want an explicit command trail or a scriptable path.
 
 ### Participant kit creation
 - `build-participant-kit`: create a participant kit under `participant_kits/`
@@ -235,15 +232,17 @@ Each analyzed run should contain:
 - `runs/<phase>/<participant_id>/edits/*`
 - `runs/<phase>/<participant_id>/logs/snippet_log.csv`
 - `runs/<phase>/<participant_id>/logs/chat_log.jsonl`
-- `runs/<phase>/<participant_id>/snippet_source.csv`
 - `runs/<phase>/<participant_id>/study_assignment.json`
 - `runs/<phase>/<participant_id>/condition.txt`
+
+Researcher-side local map:
+- `participant_kits/_researcher_maps/<phase>__<participant_id>.json`
 
 Generated by analysis:
 - `runs/<phase>/<participant_id>/analysis/*`
 - `runs/<phase>/<participant_id>/diffs/*`
 
-## 7) How Source CSVs Get Updated
+## 7) Updating Source CSVs
 ### 7.1 Classified dataset workflow
 Current layout:
 - working classified dataset: `data/datasets/classified/dataset_classified.csv`
@@ -289,14 +288,15 @@ Important behavior:
 - Kits preserve the source filename and extension recorded in metadata-derived paths.
 - Existing kits are snapshots and do not auto-update.
 
-## 8) Participant Kit Generation and Behavior
+## 8) Participant Kits
 ### 8.1 Build kits
 GUI (primary option):
 ```powershell
 .venv\Scripts\python.exe gui\kit_builder_gui.py
 ```
 Use the GUI to:
-- choose output folder, condition, phase, and model settings
+- choose output folder, phase, and model settings
+- set the participant-side LLM endpoint URL
 - choose the source CSV used for kit generation
 - check the participant's expertise areas from the loaded taxonomy
 - set `Samples / Hardness` and `Selection Seed`
@@ -304,24 +304,27 @@ Use the GUI to:
 - create one or more participant kits in one pass
 
 ![Participant Kit Builder GUI](docs/figures/Participant_Kit_Gui.png)
-*Figure 1. Participant Kit Builder GUI for selecting run settings and generating participant kits.*
+*Figure 1. Participant Kit Builder window. The exact field layout may shift as the kit workflow changes.*
 
 CLI (secondary option):
 ```powershell
 .venv\Scripts\python.exe -m scripts.study_cli build-participant-kit ^
   --participant_id P101 ^
-  --condition security ^
   --phase pilot ^
   --metadata_csv data/datasets/classified/dataset_classified.csv ^
   --expertise_areas "Backend / API Development,Security / Application Security" ^
   --samples_per_hardness 3 ^
   --selection_seed 42 ^
+  --participant_os windows ^
+  --llm_base_url https://lab-llm.example.edu ^
   --out_root participant_kits
 ```
 
 Default behavior:
-- GUI defaults to `security`.
-- CLI defaults to `security` if `--condition` is not provided.
+- The current study flow is security-only.
+- GUI and CLI run/kit creation record every participant under `security`.
+- GUI and CLI participant-kit defaults use `qwen3.6:27b`; change the kit model if your assigned endpoint serves a different model.
+- Kit generation writes only the participant launcher that matches the selected target OS.
 - If no expertise areas are selected, dataset-backed kit generation samples from the full classified dataset.
 - If `--metadata_csv` points at `data/metadata/snippet_metadata.csv`, the expertise/hardness selection settings are ignored and the kit uses the file-backed snippet list.
 
@@ -332,8 +335,7 @@ participant_kits/<participant_id>/
 |-- study_config.lock.json
 |-- kit_manifest.json
 |-- participant_web_app.py
-|-- Launch_Study_Web_App.bat
-|-- Launch_Study_Web_App.sh
+|-- Launch_Study_Web_App.<platform>         # Exactly one launcher: .bat for Windows or .sh for macOS/Linux
 |-- package_submission.py
 `-- run_<phase>_<participant_id>/
     |-- baseline/*
@@ -341,7 +343,6 @@ participant_kits/<participant_id>/
     |-- logs/participant_profile.json
     |-- logs/snippet_log.csv
     |-- logs/chat_log.jsonl
-    |-- snippet_source.csv
     |-- study_assignment.json
     |-- condition.txt
     `-- start_end_times.json
@@ -349,14 +350,14 @@ participant_kits/<participant_id>/
 
 Notes:
 - `exports/` is created when the participant packages a submission
-- `snippet_source.csv` stores the exact sampled rows used to build the kit
-- `study_assignment.json` records the source CSV, expertise filters, hardness settings, and selection seed used for that participant
+- `study_assignment.json` stores participant-safe snippet IDs, labels, and sampling settings used for that kit
+- `participant_kits/_researcher_maps/<phase>__<participant_id>.json` stays on the researcher machine and links those participant-safe IDs back to the original source rows, even if the distributable kit itself was written to a different `out_root`
 
 ### 8.3 Participant web app notes
 - Web app is driven by the snippet list in the kit, not by a fixed snippet count.
 - Snippet content is loaded per snippet request, not all code at once.
 - Participants review the baseline pane as read-only reference, use the assigned in-app LLM chat, and paste the final repaired answer into the submission box that will be graded/exported.
-- Participants do all task work inside the browser app: use Ollama, save snippet summaries, and build the return ZIP.
+- Participants do all task work inside the browser app: use the assigned in-app LLM chat, save snippet summaries, and build the return ZIP.
 
 ### 8.4 Distribute a participant kit
 1. Build the kit into `participant_kits/<participant_id>/`.
@@ -364,10 +365,10 @@ Notes:
 3. Tell the participant to:
    - make sure Python is installed on the machine that will launch the kit
    - treat that Python requirement as a launcher/runtime requirement, not as a restriction on snippet language
-   - install Ollama
-   - run `ollama pull <assigned model>` once
-   - keep `ollama serve` running while completing the study
-   - launch `Launch_Study_Web_App.bat`
+   - check the kit README for the assigned LLM endpoint
+   - connect to VPN or campus network first if your lab endpoint requires it
+   - do not change the locked endpoint or model in the kit files
+   - run the one launcher included in the kit folder
    - complete every assigned snippet and use `Finish (Build ZIP)` at the end
 4. The participant returns the ZIP created in the kit's `exports/` folder.
 
@@ -447,7 +448,7 @@ Then rebuild:
 ```
 
 ## 11) Researcher Runbook
-Before you analyze returned runs:
+Before analyzing returned runs:
 - confirm that your Python environment is ready
 - if the judge is enabled, make sure Ollama is running with the model named in `config.yaml`
 
@@ -464,7 +465,7 @@ Use the Study GUI to:
 6. Use `Open HTML Report` after the run completes.
 
 ![Research Console GUI](docs/figures/Research_Console_GUI.png)
-*Figure 2. Research Console GUI for phase selection, run-status review, and pipeline execution.*
+*Figure 2. Research Console window for phase selection, run review, and pipeline execution.*
 
 ### 11.2 Equivalent CLI workflow
 #### Receive participant zip and ingest
@@ -508,6 +509,7 @@ Aggregated:
 Modeling note:
 - `pilot_model_data.csv` uses de-identified participant labels (`participant_001`, `participant_002`, ...) rather than raw run folder names.
 - `compute-models` currently fits a local fixed-effects logistic model with participant, snippet, language, and vulnerability-type controls.
+- The condition term has been removed from the default model because the current study flow is security-only.
 
 Aggregate metrics currently emitted:
 - `mitigations_per_minute`
@@ -515,7 +517,7 @@ Aggregate metrics currently emitted:
 - `judge_strategy_variance`
 - `judge_strategy_variance_snippets`
 
-## 13) Validation and Maintenance Commands
+## 13) Checks And Maintenance
 Show CLI help:
 ```powershell
 .venv\Scripts\python.exe -m scripts.study_cli --help
@@ -526,43 +528,65 @@ Compile sanity check:
 .venv\Scripts\python.exe -m compileall scripts tools gui
 ```
 
-Synthetic pipeline smoke test:
+Run regression tests:
+```powershell
+.venv\Scripts\python.exe -m unittest discover tests -v
+```
+
+Synthetic raw-run generator:
 ```powershell
 .venv\Scripts\python.exe -m scripts.study_cli make-test-runs --core-only
+```
+
+Full synthetic pipeline smoke test:
+```powershell
+.venv\Scripts\python.exe -m scripts.study_cli make-test-runs --core-only
+.venv\Scripts\python.exe -m scripts.study_cli analyze-run --participant_id TEST001 --phase pilot --metadata_csv data/metadata/snippet_metadata.csv
+.venv\Scripts\python.exe -m scripts.study_cli merge-interaction --run_dir runs/pilot/TEST001
+.venv\Scripts\python.exe -m scripts.study_cli analyze-run --participant_id TEST002 --phase pilot --metadata_csv data/metadata/snippet_metadata.csv
+.venv\Scripts\python.exe -m scripts.study_cli merge-interaction --run_dir runs/pilot/TEST002
+.venv\Scripts\python.exe -m scripts.study_cli analyze-run --participant_id TEST003 --phase pilot --metadata_csv data/metadata/snippet_metadata.csv
+.venv\Scripts\python.exe -m scripts.study_cli merge-interaction --run_dir runs/pilot/TEST003
 .venv\Scripts\python.exe -m scripts.study_cli aggregate-pilot
 .venv\Scripts\python.exe -m scripts.study_cli compute-stats
 .venv\Scripts\python.exe -m scripts.study_cli compute-models
 .venv\Scripts\python.exe -m scripts.study_cli build-report
 ```
+Note:
+- `make-test-runs` creates raw synthetic run folders, logs, and starter files. It does not precompute `analysis/` outputs.
+- If `llm_judge.enabled` is still `true`, the `analyze-run` steps above require the configured local judge model to be available before the smoke test will finish.
+- This smoke test creates local files under `runs/` and `data/aggregated/`.
+- Clear those generated artifacts before using the publish/privacy gate.
 
 Clean participant kits:
 ```powershell
 .venv\Scripts\python.exe -m scripts.study_cli clean-participant-kits --out_root participant_kits --all --dry_run
 .venv\Scripts\python.exe -m scripts.study_cli clean-participant-kits --out_root participant_kits --all
 ```
+Note:
+- `clean-participant-kits` removes participant kit folders only.
+- It leaves `participant_kits/_researcher_maps/` in place because analysis can still depend on those local mappings.
 
-## 14) Security and IRB-Oriented Controls
+## 14) Research Safeguards In Code
 - Participant app is local-only by default (`127.0.0.1`).
 - Participant app uses origin and CSRF checks for POST endpoints.
 - Packaging validates schema and builds hash manifest.
 - Privacy reminder is visible in participant UI.
 - Pre-publish privacy scanner prevents common accidental leaks.
 
-
 Important:
-- These controls support IRB risk mitigation, but formal compliance still depends on approved protocol, consent language, and institution policy.
+- These controls help reduce study-handling mistakes in code, but they do not replace the approved protocol, consent material, or institution policy.
 
-## 15) One-Click Privacy Gate (Before Publish)
-```powershell
-Run_Privacy_Check.bat
-```
-
-CLI equivalent:
+## 15) Pre-Publish Privacy Gate
+From the CLI:
 ```powershell
 .venv\Scripts\python.exe -m scripts.study_cli privacy-check
 ```
 
-The check fails (`exit code 1`) if blocked participant-data paths or high-confidence secret signatures are found.
+From the researcher GUI:
+- use the `Pre-Publish Repo Scan` button
+
+The check exits with code `1` if it finds blocked study-data paths or a high-confidence secret signature. Even inside a git repo, it still sweeps local-only folders such as `runs/` and `participant_kits/`.
 
 ## 16) Troubleshooting
 ### `merge-interaction` fails with missing `snippet_log.csv`
@@ -571,9 +595,10 @@ Expected:
 
 ### Participant web app does not open
 - check Python install on participant machine
-- re-run `Launch_Study_Web_App.bat`
+- re-run the launcher included in that participant kit
 - ensure local port `8765` is available
-- ensure Ollama is installed and running (`ollama serve`)
+- if the kit uses a lab-hosted LLM, confirm network or VPN access to the assigned endpoint
+- if the kit uses local Ollama instead, ensure Ollama is installed and running (`ollama serve`)
 
 ### Report does not show latest values
 Re-run in order:

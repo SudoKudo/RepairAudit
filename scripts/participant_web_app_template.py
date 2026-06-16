@@ -1,7 +1,8 @@
 """Participant-facing local web app template used in generated study kits.
 
 The generated file serves baseline snippets, collects edited code plus summary
-metadata, proxies local Ollama chat calls, and builds the participant return ZIP.
+metadata, proxies chat calls to the configured LLM endpoint, and builds the
+participant return ZIP.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
@@ -142,6 +143,9 @@ class StudyStore:
         self.max_turn_text_chars = 12000
         self.max_field_chars = 2000
         self.max_chat_history_entries = 200
+        self.max_chat_context_messages = 4
+        self.max_chat_context_chars = 8000
+        self.max_chat_request_chars = 16000
 
     def _find_run_dir(self) -> Path:
         """Locate the single run_* directory bundled inside this participant kit."""
@@ -184,6 +188,15 @@ class StudyStore:
         if matches:
             return matches[0]
         return root / f"{snippet_id}.txt"
+
+    def snippet_label(self, snippet_id: str) -> str:
+        """Return the participant-facing label for one snippet without exposing source identifiers."""
+        labels = self.lock_data.get("snippet_labels", {}) if isinstance(self.lock_data, dict) else {}
+        if isinstance(labels, dict):
+            raw = str(labels.get(snippet_id, "") or "").strip()
+            if raw:
+                return raw
+        return snippet_id
 
     def _read_snippet_times(self) -> dict[str, dict[str, str]]:
         """Load snippet timing records and return an empty mapping on failure."""
@@ -767,15 +780,31 @@ class StudyStore:
             rows = rows[-self.max_chat_history_entries :]
         return rows
 
-    def chat_messages_for_ollama(self, snippet_id: str) -> list[dict[str, str]]:
-        """Map snippet chat history to Ollama chat message format."""
+    def chat_messages_for_ollama(self, snippet_id: str, *, max_chars: int | None = None) -> list[dict[str, str]]:
+        """Map snippet chat history to Ollama chat format while keeping context small."""
         entries = self.read_chat_entries(snippet_id)
+        char_budget = self.max_chat_context_chars if max_chars is None else max(0, int(max_chars))
+        if char_budget <= 0:
+            return []
+
         msgs: list[dict[str, str]] = []
-        for entry in entries:
+        used_chars = 0
+        for entry in reversed(entries):
             role = str(entry.get("role", "")).strip().lower()
             txt = str(entry.get("text", ""))
-            if role in {"user", "assistant"} and txt.strip():
-                msgs.append({"role": role, "content": txt})
+            if role not in {"user", "assistant"} or not txt.strip():
+                continue
+            if len(txt) > self.max_turn_text_chars:
+                txt = txt[-self.max_turn_text_chars :]
+            if used_chars and (used_chars + len(txt)) > char_budget:
+                break
+            if not used_chars and len(txt) > char_budget:
+                txt = txt[-char_budget:]
+            msgs.append({"role": role, "content": txt})
+            used_chars += len(txt)
+            if len(msgs) >= self.max_chat_context_messages:
+                break
+        msgs.reverse()
         return msgs
 
     def _auto_fill_row_from_chat(self, snippet_id: str, row: dict[str, str]) -> dict[str, str]:
@@ -882,7 +911,7 @@ body{margin:0;background:linear-gradient(180deg,#f9fbff 0%,#eff5ff 100%);font-fa
 .tag{font-size:11px;padding:3px 7px;border-radius:999px;background:#ecf3ff;color:#2c558f}
 .readme{max-height:220px;overflow:auto;white-space:pre-wrap;font-size:13px;color:#334f76;border:1px solid #e1ebff;border-radius:10px;padding:9px;background:#fbfdff}
 textarea,input{width:100%;border:1px solid #ccddff;border-radius:10px;padding:8px 10px;background:#fff;color:var(--text)}
-textarea{font-family:Consolas,monospace;font-size:13px;min-height:220px}
+textarea{font-family:Consolas,monospace;font-size:13px;min-height:220px;line-height:1.5;tab-size:4}
 #baseline_code{background:#f8fbff;min-height:170px}
 #chat_prompt{min-height:105px}
 /* Match dropdown styling with the rest of the UI. */
@@ -924,7 +953,7 @@ select:focus{
   <div class="hdr">
     <div class="conn" id="connBadge" title="Shows whether the browser is currently connected to the local study server.">Backend: Connecting...</div>
     <h1>RepairAudit Participant App</h1>
-    <div class="sub" id="meta">Loading study information...</div>
+    <div class="sub" id="meta">Loading study workspace...</div>
     <div class="timer" id="liveTimer">Session Time: 0h 0m 0s</div>
     <div class="notice">PRIVACY REMINDER: DO NOT INCLUDE PERSONAL IDENTIFIERS OR SENSITIVE ACCOUNT DATA IN PROMPTS, NOTES, OR CHAT TEXT.</div>
   </div>
@@ -954,26 +983,27 @@ select:focus{
         <div class="lbl" title="Original vulnerable code for this snippet.">Baseline (read-only)</div>
         <button class="btn alt tiny" id="copyBaselineBtn" title="Copy baseline code to clipboard.">Copy Baseline</button>
       </div>
-      <textarea id="baseline_code" readonly title="Baseline snippet is read-only. Use it as your reference."></textarea>
+      <div class="lbl" id="baselineMeta" style="margin:0 0 4px 0" title="Language and file name for this baseline snippet."></div>
+      <textarea id="baseline_code" readonly wrap="off" spellcheck="false" title="Baseline snippet is read-only. Use it as your reference."></textarea>
       <div class="lbl" style="margin:10px 0 4px 0" title="Paste and refine the repaired code you want to submit for this snippet.">Final Submitted Code</div>
-      <textarea id="edited_code" title="Paste the repaired result here, then edit it until it matches what you want to submit."></textarea>
+      <textarea id="edited_code" wrap="off" spellcheck="false" title="Paste the repaired result here, then edit it until it matches what you want to submit."></textarea>
 
       <hr style="border:none;border-top:1px solid #e5edff;margin:12px 0" />
       <div class="sp">
-        <strong title="Use this panel to chat with local Ollama. Prompts and replies are auto-logged to this snippet.">In-App LLM Chat (Ollama)</strong>
+        <strong title="Use this panel to chat with the LLM assigned to this kit. Prompts and replies are auto-logged to this snippet.">In-App LLM Chat</strong>
         <div class="row">
           <span class="tag" id="chatTurnCount" title="Auto-logged turns for the current snippet.">0 turns</span>
           <button class="btn alt tiny" id="toggleChatSizeBtn" type="button" title="Expand or collapse the visible chat history area.">Expand Chat</button>
         </div>
       </div>
-      <div class="lbl" id="ollamaStatus" style="margin-top:6px" title="Connection/model status for local Ollama.">Checking local Ollama connection...</div>
+      <div class="lbl" id="ollamaStatus" style="margin-top:6px" title="Connection/model status for the assigned LLM endpoint.">Checking assigned LLM connection...</div>
       <div class="chatlog" id="chatHistory" title="Chat history for the currently selected snippet."></div>
       <div class="full" style="margin-top:8px">
-        <label class="lbl" title="Enter one prompt for Ollama about the current snippet.">Chat Prompt</label>
-        <textarea id="chat_prompt" placeholder="Paste the baseline code or your current draft here and ask for a repair..." title="Press Ctrl+Enter to send quickly."></textarea>
+        <label class="lbl" title="Enter one prompt for the assigned LLM about the current snippet.">Chat Prompt</label>
+        <textarea id="chat_prompt" placeholder="Paste the relevant function or code block here and ask for a repair..." title="Press Ctrl+Enter to send quickly."></textarea>
       </div>
       <div class="row" style="margin-top:8px">
-        <button class="btn" id="sendChatBtn" title="Send prompt to Ollama and auto-log both user and assistant turns.">Send To Ollama</button></div>
+        <button class="btn" id="sendChatBtn" title="Send prompt to the assigned LLM and auto-log both user and assistant turns.">Send To LLM</button></div>
       <div class="lbl" style="margin-top:6px">Prompts and replies here are auto-logged for this snippet.</div>
     </section>
 
@@ -984,8 +1014,6 @@ select:focus{
       <hr style="border:none;border-top:1px solid #e5edff;margin:12px 0" />
       <strong title="Required and optional metadata for this snippet.">Snippet Summary</strong>
       <div class="form" style="margin-top:8px">
-        <div><label class="lbl" title="Auto-filled from the configured assistant provider.">Tool (Auto)</label><input id="tool" readonly title="Auto-filled provider (read-only)." /></div>
-        <div><label class="lbl" title="Auto-filled from the configured model in the kit.">Model (Auto)</label><input id="model" readonly title="Auto-filled model name (read-only)." /></div>
         <div>
           <label class="lbl" title="How many logged turns directly influenced your final code for this snippet.">Applied Turns</label>
           <input id="applied_turns" placeholder="integer, <= total auto turns" title="Whole number. Must be less than or equal to auto-logged turns." />
@@ -1155,6 +1183,282 @@ function snippetStatusFor(sid){
   return null;
 }
 
+function snippetLabel(sid){
+  if(state && state.snippet_labels && state.snippet_labels[sid]){
+    return String(state.snippet_labels[sid]);
+  }
+  return String(sid || "");
+}
+
+function snippetFileName(sid){
+  if(state && state.snippet_files && state.snippet_files[sid]){
+    return String(state.snippet_files[sid]);
+  }
+  return "";
+}
+
+function snippetLanguageLabel(sid){
+  var fileName = snippetFileName(sid);
+  var dot = fileName.lastIndexOf(".");
+  var ext = dot >= 0 ? fileName.slice(dot).toLowerCase() : "";
+  var labels = {
+    ".c": "C",
+    ".cc": "C++",
+    ".cpp": "C++",
+    ".cxx": "C++",
+    ".cs": "C#",
+    ".go": "Go",
+    ".java": "Java",
+    ".js": "JavaScript",
+    ".php": "PHP",
+    ".py": "Python",
+    ".rb": "Ruby",
+    ".rs": "Rust",
+    ".ts": "TypeScript"
+  };
+  return labels[ext] || (ext ? ext.slice(1).toUpperCase() : "Code");
+}
+
+function normalizeSnippetText(text){
+  return String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+function looksFlattenedCode(text){
+  var lines = normalizeSnippetText(text).split("\n").filter(function(line){
+    return line.trim() !== "";
+  });
+  if(lines.length <= 1){
+    return true;
+  }
+  var maxLen = 0;
+  var longCount = 0;
+  var totalLen = 0;
+  for(var i = 0; i < lines.length; i++){
+    var len = lines[i].length;
+    totalLen += len;
+    if(len > maxLen){ maxLen = len; }
+    if(len > 180){ longCount += 1; }
+  }
+  var avgLen = totalLen / lines.length;
+  return maxLen > 260 || avgLen > 160 || longCount >= Math.max(2, Math.floor(lines.length / 3));
+}
+
+function trimLeftText(text){
+  return String(text || "").replace(/^\s+/, "");
+}
+
+function trimRightText(text){
+  return String(text || "").replace(/\s+$/, "");
+}
+
+function splitDenseCommentLine(line){
+  if(line.indexOf("//") !== 0){
+    return [line];
+  }
+  var markers = [
+    " if (",
+    " for (",
+    " while (",
+    " switch (",
+    " return ",
+    " const ",
+    " let ",
+    " var ",
+    " int ",
+    " bool ",
+    " char ",
+    " void ",
+    " static ",
+    " class ",
+    " try ",
+    " catch ",
+    " else ",
+    " DBUG_",
+    " /*"
+  ];
+  var splitAt = -1;
+  for(var i = 0; i < markers.length; i++){
+    var pos = line.indexOf(markers[i], 3);
+    if(pos > 10 && (splitAt === -1 || pos < splitAt)){
+      splitAt = pos;
+    }
+  }
+  if(splitAt === -1){
+    return [line];
+  }
+  return [
+    trimRightText(line.slice(0, splitAt)),
+    trimLeftText(line.slice(splitAt))
+  ];
+}
+
+function splitDenseBlockCommentLine(line){
+  var pos = line.indexOf("*/");
+  if(pos === -1 || pos >= line.length - 2){
+    return [line];
+  }
+  var tail = trimLeftText(line.slice(pos + 2));
+  if(!tail){
+    return [line];
+  }
+  return [
+    trimRightText(line.slice(0, pos + 2)),
+    tail
+  ];
+}
+
+function formatFlatCStyleCode(text){
+  var rawLines = [];
+  var token = [];
+  var inString = "";
+  var escaping = false;
+  var index = 0;
+  var length = text.length;
+
+  while(index < length){
+    var ch = text.charAt(index);
+
+    if(!inString && text.slice(index, index + 2) === "/*"){
+      var blockPiece = trimRightText(token.join(""));
+      if(blockPiece){
+        rawLines.push(blockPiece);
+      }
+      token = [];
+      var blockEnd = text.indexOf("*/", index + 2);
+      if(blockEnd === -1){
+        rawLines.push(text.slice(index).trim());
+        break;
+      }
+      rawLines.push(text.slice(index, blockEnd + 2).trim());
+      index = blockEnd + 2;
+      continue;
+    }
+
+    if(!inString && text.slice(index, index + 2) === "//"){
+      var commentPiece = trimRightText(token.join(""));
+      if(commentPiece){
+        rawLines.push(commentPiece);
+      }
+      token = [];
+      var lineEnd = text.indexOf("\n", index + 2);
+      if(lineEnd === -1){
+        var tail = text.slice(index).trim();
+        var splitTail = splitDenseCommentLine(tail);
+        for(var st = 0; st < splitTail.length; st++){
+          if(splitTail[st]){
+            rawLines.push(splitTail[st]);
+          }
+        }
+        break;
+      }
+      rawLines.push(text.slice(index, lineEnd).trim());
+      index = lineEnd;
+      continue;
+    }
+
+    token.push(ch);
+    if(inString){
+      if(escaping){
+        escaping = false;
+        index += 1;
+        continue;
+      }
+      if(ch === "\\"){
+        escaping = true;
+        index += 1;
+        continue;
+      }
+      if(ch === inString){
+        inString = "";
+      }
+      index += 1;
+      continue;
+    }
+
+    if(ch === "\"" || ch === "'"){
+      inString = ch;
+      index += 1;
+      continue;
+    }
+
+    if(ch === "{" || ch === "}" || ch === ";"){
+      var piece = token.join("").trim();
+      if(piece){
+        rawLines.push(piece);
+      }
+      token = [];
+      index += 1;
+      continue;
+    }
+
+    index += 1;
+  }
+
+  var tail = token.join("").trim();
+  if(tail){
+    rawLines.push(tail);
+  }
+
+  var indent = 0;
+  var lines = [];
+  for(var lineIndex = 0; lineIndex < rawLines.length; lineIndex++){
+    var rawLine = rawLines[lineIndex];
+    var blockParts = splitDenseBlockCommentLine(rawLine);
+    for(var blockIndex = 0; blockIndex < blockParts.length; blockIndex++){
+      var denseParts = splitDenseCommentLine(blockParts[blockIndex]);
+      for(var denseIndex = 0; denseIndex < denseParts.length; denseIndex++){
+        var line = denseParts[denseIndex].trim().replace(/\s+/g, " ");
+        if(!line){
+          continue;
+        }
+        if(line.indexOf("}") === 0){
+          indent = Math.max(0, indent - 1);
+        }
+        lines.push(new Array(indent + 1).join("    ") + line);
+        var opens = (line.match(/\{/g) || []).length;
+        var closes = (line.match(/\}/g) || []).length;
+        if(opens > closes){
+          indent += (opens - closes);
+        } else if(closes > opens && line.indexOf("}") !== 0){
+          indent = Math.max(0, indent - (closes - opens));
+        }
+      }
+    }
+  }
+  return lines.join("\n");
+}
+
+function formatBaselineForDisplay(text, sid){
+  var normalized = normalizeSnippetText(text).trim();
+  if(!normalized){
+    return "";
+  }
+  var fileName = snippetFileName(sid).toLowerCase();
+  var ext = fileName.slice(fileName.lastIndexOf("."));
+  var cLike = {
+    ".c": true,
+    ".cc": true,
+    ".cpp": true,
+    ".cxx": true,
+    ".cs": true,
+    ".go": true,
+    ".java": true,
+    ".js": true,
+    ".php": true,
+    ".ts": true
+  };
+  if(cLike[ext] && looksFlattenedCode(normalized)){
+    normalized = formatFlatCStyleCode(
+      normalized
+        .split("\n")
+        .map(function(line){ return line.trim(); })
+        .filter(function(line){ return line !== ""; })
+        .join(" ")
+    );
+  }
+  return normalized + "\n";
+}
+
 function renderSidebar(){
   if(!state){ return; }
   var list = byId("snippetList");
@@ -1178,7 +1482,7 @@ function renderSidebar(){
     row.className = "snip" + (i === idx ? " active" : "");
     row.title = complete ? "Snippet complete. Click to review." : "Snippet in progress. Click to continue.";
     var left = document.createElement("span");
-    left.textContent = sid;
+    left.textContent = snippetLabel(sid);
     var badge = document.createElement("span");
     badge.className = "tag";
     badge.textContent = complete ? "Complete" : "In Progress";
@@ -1236,18 +1540,19 @@ function wireProfileInputs(){
 
 function fillSummary(row){
   row = row || {};
-  var fields = ["tool","model","applied_turns","strategy_primary","confidence_1to5","notes"];
+  var fields = ["applied_turns","strategy_primary","confidence_1to5","notes"];
   for(var i=0;i<fields.length;i++){
     var key = fields[i];
     var el = byId(key);
-    if(el){ el.value = row[key] || ""; }
+    if(!el){ continue; }
+    el.value = row[key] || "";
   }
 }
 
 function collectSummary(){
   var out = {};
-  out.tool = (state && state.provider) ? String(state.provider) : "";
-  out.model = (state && state.model) ? String(state.model) : "";
+  out.tool = "";
+  out.model = "";
   var fields = ["applied_turns","strategy_primary","confidence_1to5","notes"];
   for(var i=0;i<fields.length;i++){
     var key = fields[i];
@@ -1258,49 +1563,36 @@ function collectSummary(){
 }
 
 function buildInAppGuide(data){
-  var modelName = (data && data.model) ? String(data.model) : "assigned model";
-  var provider = (data && data.provider) ? String(data.provider) : "configured provider";
   return [
-    "Quick Steps",
-    "1) Select a snippet from the left sidebar.",
-    "2) Review Baseline (read-only) and copy the code you want the model to repair.",
-    "3) Paste that code into the In-App LLM Chat, ask for a repair, and review the response carefully.",
-    "4) Paste or refine the repaired result in Final Submitted Code.",
-    "5) Only Final Submitted Code is exported. The baseline pane stays reference-only.",
-    "6) Complete the Participant Profile in the onboarding popup and click Begin Study.",
-    "7) The timer starts only after Begin Study.",
-    "8) Fill snippet summary fields, click Save, repeat for all snippets, then click Finish (Build ZIP).",
+    "Quick Reference",
+    "- Use the Onboarding button any time you need to reopen the instructions or participant profile.",
+    "- The Baseline pane is reference-only. Only Final Submitted Code is exported.",
+    "- If a snippet is long, send only the function or block you are repairing.",
+    "- Save each snippet summary before moving to the next one. When everything is done, click Finish (Build ZIP).",
     "",
-    "LLM Usage",
-    "- Assigned provider: " + provider,
-    "- Assigned model: " + modelName,
-    "- At least one in-app LLM turn is required for each snippet.",
-    "- A turn means one logged user or assistant message in the in-app chat for the current snippet.",
-    "- Use the in-app assistant assigned with this kit. Do not send study code to outside assistants or web services unless the research team explicitly told you to do that.",
+    "Assistant Rules",
+    "- Use the assistant that comes with this kit.",
+    "- Each snippet must include at least one in-app LLM turn.",
+    "- A turn is one logged message in the current snippet chat.",
+    "- Do not send study code to outside assistants or web services unless the research team told you to do that.",
     "",
-    "Prompt Strategies",
-    "- Zero-Shot: ask directly for a fix with no examples. Example: Fix the SQL injection vulnerability in this function. Return only the corrected code.",
-    "- Few-Shot: give examples before asking for the fix. Example: Example unsafe ... Example safe ... Now fix this function.",
-    "- Chain-of-Thought: ask the model to reason step by step before giving the final fix. Example: Think step by step about why this code is vulnerable, then provide the final corrected code.",
-    "- Adaptive Chain-of-Thought: ask the model to choose concise or step-by-step reasoning based on task difficulty. Example: If the fix is simple, answer briefly. If complex, reason step by step and then provide the final corrected code.",
-    "",
-    "Snippet Summary Fields You Must Enter",
-    "- Tip: hover over metric names, field labels, and button names in the app to see tooltips.",
+    "Snippet Summary",
+    "- Tip: hover over labels and buttons in the app if you need the field description.",
     "- Applied Turns: non-negative integer, must be <= total logged turns. Count only assistant turns that changed your final code.",
-    "- Primary Strategy: choose the main prompt strategy you used for this snippet.",
+    "- Primary Strategy: pick the main prompt style you used for this snippet.",
     "- Confidence: choose a value from 1 to 5.",
     "- Notes: optional short factual notes.",
     "",
-    "Auto-Logged By App",
+    "Recorded Automatically",
     "- Tool/provider and model",
     "- Total turns",
     "- First and final prompts",
     "- Full chat transcript per snippet",
     "- Session timer (resume-aware)",
     "",
-    "If Ollama Refuses Or Times Out",
+    "If The Assistant Stalls",
     "- Retry once with a narrower repair request.",
-    "- If Ollama still fails, keep your current code changes and continue.",
+    "- If it still fails, keep your current code changes and continue.",
     "",
     "Privacy Reminder",
     "- Do not include personal identifiers or sensitive account data."
@@ -1385,33 +1677,32 @@ function focusParticipantProfile(){
 }
 
 function buildOnboardingHtml(data){
-  var modelName = escHtml((data && data.model) ? String(data.model) : "assigned model");
-  var provider = escHtml((data && data.provider) ? String(data.provider) : "configured provider");
   return [
-    "<p>This app is the full task workflow. You do not need to switch back to the README while completing the kit.</p>",
+    "<p>Complete the study inside this app. The README is only for setup and launch.</p>",
     "<h3>How To Complete Each Snippet</h3>",
     "<ul>",
     "<li>Select a snippet from the left list.</li>",
-    "<li>Review the baseline code, copy the code you want repaired into the in-app LLM chat, then paste the repaired result into <strong>Final Submitted Code</strong>.</li>",
+    "<li>Review the baseline code, copy the part you want repaired into the in-app chat, then paste the repaired result into <strong>Final Submitted Code</strong>.</li>",
     "<li>The baseline pane is reference-only. Only <strong>Final Submitted Code</strong> is exported for analysis.</li>",
-    "<li>Complete the participant profile below, review this onboarding guide, and click <strong>Begin Study</strong>. The timer starts only then.</li>",
-    "<li>Use the in-app Ollama chat only. At least one in-app turn is required for each snippet.</li>",
+    "<li>Complete the participant profile below, read this onboarding guide, and click <strong>Begin Study</strong>. The timer starts only then.</li>",
+    "<li>Use the in-app chat that comes with this kit. At least one in-app turn is required for each snippet.</li>",
+    "<li>If a snippet is long, send only the relevant function or code block instead of the whole file.</li>",
     "<li>Fill in the snippet summary and save before moving on.</li>",
     "<li>After all snippets are complete, click <strong>Finish (Build ZIP)</strong>.</li>",
     "</ul>",
-    "<h3>Assigned Model</h3>",
-    "<p>Provider: <strong>" + provider + "</strong><br/>Model: <strong>" + modelName + "</strong></p>",
+    "<h3>Assigned Assistant</h3>",
+    "<p>Use the assistant built into this kit. Do not switch to outside assistants or edit the kit files unless the research team told you to do that.</p>",
     "<h3>What Counts As A Turn</h3>",
     "<p>A turn is one logged message in the in-app chat. The app auto-logs total turns for each snippet.</p>",
     "<p><strong>Applied Turns</strong> means how many assistant turns directly changed your final code.</p>",
     "<h3>Prompt Strategies</h3>",
     "<ul>",
-    "<li><strong>Zero-Shot</strong>: ask directly for a fix with no examples.<div class='example'>Fix the SQL injection vulnerability in this function. Return only the corrected code.</div></li>",
-    "<li><strong>Few-Shot</strong>: provide short examples before asking for the fix.<div class='example'>Example unsafe: ... Example safe: ... Now fix this function.</div></li>",
-    "<li><strong>Chain-of-Thought</strong>: ask the model to reason step by step before giving the final fix.<div class='example'>Think step by step about why this code is vulnerable, then provide the final corrected code.</div></li>",
-    "<li><strong>Adaptive Chain-of-Thought</strong>: ask the model to decide whether concise or step-by-step reasoning is needed.<div class='example'>If the fix is simple, answer briefly. If complex, reason step by step and then provide the final corrected code.</div></li>",
+    "<li><strong>Zero-Shot</strong>: ask for the fix directly, with no example first.<div class='example'>Fix the SQL injection issue in this function. Return only the corrected code.</div></li>",
+    "<li><strong>Few-Shot</strong>: give one or two short examples before asking for the fix.<div class='example'>Example unsafe: ... Example safe: ... Now fix this function.</div></li>",
+    "<li><strong>Chain-of-Thought</strong>: ask the model to explain its reasoning before it gives the final code.<div class='example'>Walk through why this code is vulnerable, then return the corrected code.</div></li>",
+    "<li><strong>Adaptive Chain-of-Thought</strong>: let the model decide whether a short answer is enough or whether step-by-step reasoning is needed.<div class='example'>If the fix is simple, answer briefly. If it is not, reason it out and then return the corrected code.</div></li>",
     "</ul>",
-    "<h3>If Ollama Refuses Or Fails</h3>",
+    "<h3>If The Assistant Refuses Or Fails</h3>",
     "<ul>",
     "<li>Retry once with a narrower repair request.</li>",
     "<li>If it still fails, keep your current code changes and move on.</li>",
@@ -1544,15 +1835,26 @@ function formatChatFailure(msg){
   var raw = String(msg || "");
   var lower = raw.toLowerCase();
   if(lower.indexOf("empty response") !== -1){
-    return "Ollama returned an empty response. Retry once with a narrower repair request.";
+    return "The assigned LLM returned an empty response. Retry once with a narrower repair request.";
+  }
+  if(
+    lower.indexOf("context window") !== -1 ||
+    lower.indexOf("maximum context length") !== -1 ||
+    lower.indexOf("prompt is too large") !== -1 ||
+    lower.indexOf("prompt too large") !== -1 ||
+    lower.indexOf("too many tokens") !== -1 ||
+    lower.indexOf("input is too long") !== -1 ||
+    lower.indexOf("input too large") !== -1
+  ){
+    return "The pasted request is too large for one LLM turn. Send only the relevant function or block, then retry.";
   }
   if(lower.indexOf("timed out") !== -1 || lower.indexOf("timeout") !== -1){
-    return "Ollama timed out before returning a response. Retry once or shorten the request.";
+    return "The assigned LLM timed out before returning a response. Retry once or shorten the request.";
   }
   if(lower.indexOf("connection") !== -1 || lower.indexOf("refused") !== -1 || lower.indexOf("unavailable") !== -1){
-    return "Could not reach Ollama. Confirm it is running, then retry.";
+    return "Could not reach the assigned LLM endpoint. Confirm it is available, then retry.";
   }
-  return "Ollama request failed: " + raw;
+  return "LLM request failed: " + raw;
 }
 
 function getAutoTurnsForCurrent(){
@@ -1613,7 +1915,7 @@ function refreshState(cb){
     setConn(true);
     var meta = byId("meta");
     if(meta){
-      meta.textContent = "Participant: " + d.participant_id + " | Condition: " + d.condition + " | Phase: " + d.phase + " | Model: " + d.model;
+      meta.textContent = "Assigned snippets loaded. Use Onboarding for instructions.";
     }
     var readme = byId("readme");
     if(readme){ readme.textContent = buildInAppGuide(d); }
@@ -1644,9 +1946,15 @@ function loadSnippet(){
     var progress = byId("progress");
     if(progress){ progress.textContent = "Snippet " + (idx + 1) + " of " + state.snippet_ids.length; }
     var sidLbl = byId("sidLbl");
-    if(sidLbl){ sidLbl.textContent = currentSid; }
+    if(sidLbl){ sidLbl.textContent = snippetLabel(currentSid); }
+    var baselineMeta = byId("baselineMeta");
+    if(baselineMeta){
+      var fileName = snippetFileName(currentSid);
+      var language = snippetLanguageLabel(currentSid);
+      baselineMeta.textContent = fileName ? (language + " | " + fileName) : language;
+    }
     var baseline = byId("baseline_code");
-    if(baseline){ baseline.value = d.baseline_code || ""; }
+    if(baseline){ baseline.value = formatBaselineForDisplay(d.baseline_code || "", currentSid); }
     var edited = byId("edited_code");
     if(edited){
       var editedText = d.edited_code || "";
@@ -1654,9 +1962,9 @@ function loadSnippet(){
     }
     fillSummary(d.summary || {});
     var tool = byId("tool");
-    if(tool){ tool.value = (state && state.provider) ? String(state.provider) : ""; }
+    if(tool){ tool.value = "Auto-recorded"; }
     var model = byId("model");
-    if(model){ model.value = (state && state.model) ? String(state.model) : ""; }
+    if(model){ model.value = "Auto-recorded"; }
     var autoTurns = getAutoTurnsForCurrent();
     var autoTurnsNote = byId("autoTurnsNote");
     if(autoTurnsNote){ autoTurnsNote.textContent = "Auto-logged turns for this snippet: " + autoTurns; }
@@ -1705,7 +2013,7 @@ function saveCurrent(nextFn){
   var code = byId("edited_code") ? byId("edited_code").value : "";
   var payload = {snippet_id: currentSid, code: code, summary: collectSummary()};
   api("/api/save_snippet", "POST", payload, function(){
-    setMsg("Saved " + currentSid + ".", true);
+    setMsg("Saved " + snippetLabel(currentSid) + ".", true);
     refreshState(function(){
       if(nextFn){ nextFn(); }
     });
@@ -1769,17 +2077,16 @@ function refreshOllamaStatus(){
   if(!el){ return; }
   api("/api/ollama_status", "GET", null, function(d){
     if(d && d.ok){
-      var model = d.model || "";
       if(d.model_found){
-        el.textContent = "Ollama connected. Model ready: " + model;
+        el.textContent = "Assigned LLM connected and ready.";
       } else {
-        el.textContent = "Ollama connected, but assigned model not found locally: " + model;
+        el.textContent = "Assigned LLM connected, but the expected runtime profile was not reported.";
       }
     } else {
-      el.textContent = "Ollama status unavailable.";
+      el.textContent = "Assigned LLM status unavailable.";
     }
   }, function(msg){
-    el.textContent = "Ollama unavailable: " + msg;
+    el.textContent = "Assigned LLM unavailable: " + msg;
   });
 }
 
@@ -1798,6 +2105,10 @@ function sendChat(){
     setMsg("Chat prompt is required.", false);
     return;
   }
+  if(prompt.length > 12000){
+    setMsg("Chat prompt is too large for one request. Paste only the relevant function or block, then retry.", false);
+    return;
+  }
   var btn = byId("sendChatBtn");
   if(btn){ btn.disabled = true; btn.textContent = "Saving Draft..."; }
 
@@ -1806,27 +2117,29 @@ function sendChat(){
     api("/api/ollama_chat", "POST", {
       snippet_id: currentSid,
       prompt: prompt,
-      provider: "ollama",
-      model: (state && state.model) ? state.model : "",
-      session_id: ((state && state.participant_id) ? String(state.participant_id) : "session") + "_session_1"
+      provider: "",
+      model: "",
+      session_id: "session_1"
     }, function(resp){
       if(promptEl){ promptEl.value = ""; }
       var assistantText = (resp && resp.assistant_text) ? String(resp.assistant_text) : "";
-      if(isRefusalLike(assistantText)){
-        setMsg("Ollama response was logged, but it looks like a refusal or non-answer. Retry once with a narrower repair request if needed.", false);
+      if(resp && resp.truncated){
+        setMsg("The LLM response was cut off before it finished. Send a smaller code block or retry after narrowing the request.", false);
+      } else if(isRefusalLike(assistantText)){
+        setMsg("The LLM response was logged, but it looks like a refusal or non-answer. Retry once with a narrower repair request if needed.", false);
       } else {
-        setMsg("Ollama response logged for " + currentSid + ".", true);
+        setMsg("LLM response logged for " + snippetLabel(currentSid) + ".", true);
       }
       refreshState(function(){
         loadSnippet();
       });
-      if(btn){ btn.disabled = false; btn.textContent = "Send To Ollama"; }
+      if(btn){ btn.disabled = false; btn.textContent = "Send To LLM"; }
     }, function(msg){
-      if(btn){ btn.disabled = false; btn.textContent = "Send To Ollama"; }
+      if(btn){ btn.disabled = false; btn.textContent = "Send To LLM"; }
       setMsg(formatChatFailure(msg), false);
     });
   }, function(msg){
-    if(btn){ btn.disabled = false; btn.textContent = "Send To Ollama"; }
+    if(btn){ btn.disabled = false; btn.textContent = "Send To LLM"; }
     setMsg("Could not save the current draft before chat: " + msg, false);
   });
 }
@@ -1883,8 +2196,8 @@ function buildZip(){
       api("/api/build_zip", "POST", {
         confirmed_assigned_profile: att.confirmed,
         deviation_note: att.note,
-        provider: (state && state.provider) ? String(state.provider) : "",
-        model: (state && state.model) ? String(state.model) : ""
+        provider: "",
+        model: ""
       }, function(resp){
         var zipPath = resp && resp.zip_path ? String(resp.zip_path) : "";
         setMsg(zipPath ? ("ZIP created: " + zipPath) : "ZIP created.", true);
@@ -2053,6 +2366,19 @@ class AppHandler(BaseHTTPRequestHandler):
     client_seen: bool = False
     heartbeat_seen: bool = False
     close_requested_at: float | None = None
+    quiet_paths = {"/api/ping", "/api/heartbeat", "/api/save_snippet"}
+
+    def log_message(self, format: str, *args: object) -> None:
+        """Hide routine health-check and autosave lines from the console window."""
+        try:
+            parts = str(getattr(self, "requestline", "") or "").split()
+            path = parts[1] if len(parts) >= 2 else ""
+            status_text = str(args[1]) if len(args) >= 2 else ""
+            if path.split("?", 1)[0] in self.quiet_paths and status_text.startswith(("2", "3")):
+                return
+        except Exception:
+            pass
+        super().log_message(format, *args)
 
     def _post_security_ok(self) -> tuple[bool, str]:
         """Require same-origin + CSRF token for state-changing requests."""
@@ -2093,11 +2419,14 @@ class AppHandler(BaseHTTPRequestHandler):
 
 
     def _ollama_request(self, path: str, payload: dict[str, object] | None = None, *, timeout: float = 90.0) -> dict[str, object]:
-        """Call local Ollama HTTP API and return parsed JSON object."""
-        url = f"http://127.0.0.1:11434{path}"
+        """Call the configured Ollama-compatible HTTP API and return parsed JSON."""
+        url = self._ollama_url(path)
         data = None
         method = "GET"
-        headers = {"Content-Type": "application/json"}
+        headers = {
+            "Content-Type": "application/json",
+            "ngrok-skip-browser-warning": "true",
+        }
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")
             method = "POST"
@@ -2106,19 +2435,59 @@ class AppHandler(BaseHTTPRequestHandler):
         try:
             with urlopen(req, timeout=timeout) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
+        except HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            detail = raw.strip()
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    detail = str(parsed.get("error") or parsed.get("message") or detail).strip()
+            except Exception:
+                pass
+            if detail:
+                raise RuntimeError(f"LLM endpoint rejected the request ({exc.code}): {detail}") from exc
+            raise RuntimeError(f"LLM endpoint rejected the request ({exc.code}).") from exc
         except URLError as exc:
-            raise RuntimeError(f"Could not reach local Ollama API at 127.0.0.1:11434 ({exc}).") from exc
+            raise RuntimeError(
+                f"Could not reach the configured LLM endpoint at {self._ollama_base_url()} ({exc})."
+            ) from exc
         except Exception as exc:
-            raise RuntimeError(f"Ollama request failed: {exc}") from exc
+            raise RuntimeError(f"LLM request failed: {exc}") from exc
 
         try:
             obj = json.loads(raw)
         except Exception as exc:
-            raise RuntimeError("Ollama returned non-JSON response.") from exc
+            raise RuntimeError("LLM endpoint returned non-JSON response.") from exc
 
         if not isinstance(obj, dict):
-            raise RuntimeError("Ollama returned unexpected response format.")
+            raise RuntimeError("LLM endpoint returned unexpected response format.")
         return obj
+
+    def _ollama_base_url(self) -> str:
+        """Return the configured participant-side Ollama-compatible endpoint base URL."""
+        llm = self.store.lock_data.get("llm", {})
+        if isinstance(llm, dict):
+            raw = str(llm.get("base_url", "") or "").strip()
+            if raw:
+                return raw.rstrip("/")
+        return "http://127.0.0.1:11434"
+
+    def _ollama_url(self, path: str) -> str:
+        """Join a configured base URL with an Ollama API path."""
+        base = self._ollama_base_url()
+        path = path if path.startswith("/") else f"/{path}"
+        if base.lower().endswith("/api") and path.startswith("/api/"):
+            return base + path[4:]
+        return base + path
+
+    def _ollama_endpoint_label(self) -> str:
+        """Return short endpoint text for participant-facing status messages."""
+        base = self._ollama_base_url()
+        parsed = urlparse(base)
+        host = (parsed.hostname or "").strip().lower()
+        if host in {"", "127.0.0.1", "localhost", "::1"}:
+            return "local Ollama"
+        return base
 
     def _ollama_assigned_model(self) -> str:
         """Return the locked model name assigned to the participant kit."""
@@ -2153,19 +2522,17 @@ class AppHandler(BaseHTTPRequestHandler):
             AppHandler.client_seen = True
             ids = self.store.get_snippet_ids()
             readme_text = self.store.readme_path.read_text(encoding="utf-8", errors="replace")
-            llm = self.store.lock_data.get("llm", {})
-            provider = llm.get("provider", "ollama") if isinstance(llm, dict) else "ollama"
-            model = llm.get("model", "") if isinstance(llm, dict) else ""
             completion = self.store.completion_status()
             readiness_issues = self.store.preflight_issues()
             self._json(
                 {
-                    "participant_id": str(self.store.lock_data.get("participant_id", "")).strip(),
-                    "condition": str(self.store.lock_data.get("condition", "")).strip(),
-                    "phase": str(self.store.lock_data.get("phase", "")).strip(),
-                    "provider": str(provider),
-                    "model": str(model),
                     "snippet_ids": ids,
+                    "snippet_files": {
+                        snippet_id: self.store._snippet_filename(snippet_id) for snippet_id in ids
+                    },
+                    "snippet_labels": {
+                        snippet_id: self.store.snippet_label(snippet_id) for snippet_id in ids
+                    },
                     "readme": readme_text,
                     "participant_profile": self.store.read_participant_profile(),
                     "completion": completion,
@@ -2192,9 +2559,27 @@ class AppHandler(BaseHTTPRequestHandler):
                     if isinstance(item, dict):
                         names.append(str(item.get("name", "")))
                 found = (assigned in names) if assigned else False
-                self._json({"ok": True, "model": assigned, "model_found": found, "installed_models": names})
+                self._json(
+                    {
+                        "ok": True,
+                        "model": assigned,
+                        "model_found": found,
+                        "installed_models": names,
+                        "endpoint": self._ollama_base_url(),
+                        "endpoint_label": self._ollama_endpoint_label(),
+                    }
+                )
             except Exception as exc:
-                self._json({"ok": False, "model": assigned, "model_found": False, "error": str(exc)})
+                self._json(
+                    {
+                        "ok": False,
+                        "model": assigned,
+                        "model_found": False,
+                        "endpoint": self._ollama_base_url(),
+                        "endpoint_label": self._ollama_endpoint_label(),
+                        "error": str(exc),
+                    }
+                )
             return
 
         if parsed.path == "/api/chat_history":
@@ -2333,7 +2718,7 @@ class AppHandler(BaseHTTPRequestHandler):
 
             if parsed.path == "/api/ollama_chat":
                 if not self.store.study_started():
-                    self._json({"error": "Review onboarding and click Begin Study before using Ollama chat."}, status=HTTPStatus.BAD_REQUEST)
+                    self._json({"error": "Review onboarding and click Begin Study before using the in-app LLM chat."}, status=HTTPStatus.BAD_REQUEST)
                     return
                 snippet_id = str(body.get("snippet_id", "")).strip()
                 prompt = str(body.get("prompt", ""))
@@ -2347,19 +2732,40 @@ class AppHandler(BaseHTTPRequestHandler):
                 if not prompt.strip():
                     self._json({"error": "prompt is required"}, status=HTTPStatus.BAD_REQUEST)
                     return
+                if len(prompt) > self.store.max_turn_text_chars:
+                    self._json(
+                        {
+                            "error": (
+                                f"Prompt is too large ({len(prompt)} characters). "
+                                f"Keep each LLM request under {self.store.max_turn_text_chars} characters "
+                                "and send only the relevant function or block."
+                            )
+                        },
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
                 if not model:
                     self._json({"error": "No model configured in this participant kit."}, status=HTTPStatus.BAD_REQUEST)
                     return
 
-                prior = self.store.chat_messages_for_ollama(snippet_id)
+                context_budget = max(0, self.store.max_chat_request_chars - len(prompt))
+                prior = self.store.chat_messages_for_ollama(
+                    snippet_id,
+                    max_chars=min(self.store.max_chat_context_chars, context_budget),
+                )
                 msgs = prior + [{"role": "user", "content": prompt}]
-                payload: dict[str, object] = {"model": model, "messages": msgs, "stream": False}
+                payload: dict[str, object] = {
+                    "model": model,
+                    "messages": msgs,
+                    "stream": False,
+                    "think": False,
+                }
                 options = self._ollama_options_from_lock()
                 if options:
                     payload["options"] = options
 
                 try:
-                    resp = self._ollama_request("/api/chat", payload)
+                    resp = self._ollama_request("/api/chat", payload, timeout=240.0)
                 except Exception as exc:
                     self._json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
                     return
@@ -2371,8 +2777,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 if not assistant_text.strip():
                     assistant_text = str(resp.get("response", "") or "")
                 if not assistant_text.strip():
-                    self._json({"error": "Ollama returned an empty response."}, status=HTTPStatus.BAD_REQUEST)
+                    self._json({"error": "The assigned LLM returned an empty response."}, status=HTTPStatus.BAD_REQUEST)
                     return
+                done_reason = str(resp.get("done_reason", "") or "").strip().lower()
+                truncated = done_reason == "length"
 
                 user_entry = self.store.append_turn(
                     snippet_id=snippet_id,
@@ -2395,6 +2803,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     {
                         "ok": True,
                         "assistant_text": assistant_text,
+                        "truncated": truncated,
                         "user_entry": user_entry,
                         "assistant_entry": assistant_entry,
                     }

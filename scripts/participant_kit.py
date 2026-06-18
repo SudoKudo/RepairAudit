@@ -10,11 +10,13 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 import random
 import re
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -593,6 +595,243 @@ def _hide_participant_support_dir(path: Path, participant_os: str) -> None:
         pass
 
 
+def _looks_like_windows_lock_error(exc: OSError) -> bool:
+    """Recognize the Windows error text raised when a directory is someone's cwd."""
+    text = str(exc or "").casefold()
+    return "being used by another process" in text or "cannot access the file" in text
+
+
+def _windows_process_snapshot(process_names: tuple[str, ...]) -> list[dict[str, str]]:
+    """Read a small process snapshot through PowerShell so we can inspect likely lockers."""
+    quoted = ",".join(f"'{name}'" for name in process_names)
+    command = (
+        "Get-CimInstance Win32_Process | "
+        f"Where-Object {{ $_.Name -in @({quoted}) }} | "
+        "Select-Object ProcessId,Name,CommandLine | ConvertTo-Json -Depth 3"
+    )
+    proc = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+        check=False,
+    )
+    payload = (proc.stdout or "").strip()
+    if not payload:
+        return []
+    try:
+        parsed = json.loads(payload)
+    except Exception:
+        return []
+    if isinstance(parsed, dict):
+        parsed = [parsed]
+    rows: list[dict[str, str]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "pid": _clean_text(item.get("ProcessId", "")),
+                "name": _clean_text(item.get("Name", "")),
+                "command_line": _clean_text(item.get("CommandLine", "")),
+            }
+        )
+    return rows
+
+
+def _windows_process_current_directory(pid: int) -> str:
+    """Read another process's current directory from the PEB."""
+    import ctypes
+    from ctypes import wintypes
+
+    process_query_information = 0x0400
+    process_vm_read = 0x0010
+
+    class UnicodeString(ctypes.Structure):
+        _fields_ = [
+            ("Length", wintypes.USHORT),
+            ("MaximumLength", wintypes.USHORT),
+            ("Buffer", ctypes.c_void_p),
+        ]
+
+    class CurDir(ctypes.Structure):
+        _fields_ = [("DosPath", UnicodeString), ("Handle", wintypes.HANDLE)]
+
+    class ProcessParameters(ctypes.Structure):
+        _fields_ = [
+            ("MaximumLength", wintypes.ULONG),
+            ("Length", wintypes.ULONG),
+            ("Flags", wintypes.ULONG),
+            ("DebugFlags", wintypes.ULONG),
+            ("ConsoleHandle", wintypes.HANDLE),
+            ("ConsoleFlags", wintypes.ULONG),
+            ("StandardInput", wintypes.HANDLE),
+            ("StandardOutput", wintypes.HANDLE),
+            ("StandardError", wintypes.HANDLE),
+            ("CurrentDirectory", CurDir),
+        ]
+
+    class Peb(ctypes.Structure):
+        _fields_ = [
+            ("Reserved1", ctypes.c_ubyte * 2),
+            ("BeingDebugged", ctypes.c_ubyte),
+            ("Reserved2", ctypes.c_ubyte * 1),
+            ("Reserved3", ctypes.c_void_p * 2),
+            ("Ldr", ctypes.c_void_p),
+            ("ProcessParameters", ctypes.c_void_p),
+        ]
+
+    class ProcessBasicInformation(ctypes.Structure):
+        _fields_ = [
+            ("Reserved1", ctypes.c_void_p),
+            ("PebBaseAddress", ctypes.c_void_p),
+            ("Reserved2_0", ctypes.c_void_p),
+            ("Reserved2_1", ctypes.c_void_p),
+            ("UniqueProcessId", ctypes.c_void_p),
+            ("Reserved3", ctypes.c_void_p),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    open_process.restype = wintypes.HANDLE
+
+    read_process_memory = kernel32.ReadProcessMemory
+    read_process_memory.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_size_t),
+    ]
+    read_process_memory.restype = wintypes.BOOL
+
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    nt_query_information_process = ntdll.NtQueryInformationProcess
+    nt_query_information_process.argtypes = [
+        wintypes.HANDLE,
+        wintypes.ULONG,
+        ctypes.c_void_p,
+        wintypes.ULONG,
+        ctypes.POINTER(wintypes.ULONG),
+    ]
+    nt_query_information_process.restype = wintypes.LONG
+
+    def read_struct(handle: int, address: int, struct_type: type[ctypes.Structure]) -> ctypes.Structure:
+        obj = struct_type()
+        read = ctypes.c_size_t()
+        ok = read_process_memory(handle, address, ctypes.byref(obj), ctypes.sizeof(obj), ctypes.byref(read))
+        if not ok:
+            raise OSError(ctypes.get_last_error())
+        return obj
+
+    handle = open_process(process_query_information | process_vm_read, False, int(pid))
+    if not handle:
+        raise OSError(ctypes.get_last_error())
+    try:
+        pbi = ProcessBasicInformation()
+        result_length = wintypes.ULONG()
+        status = nt_query_information_process(
+            handle,
+            0,
+            ctypes.byref(pbi),
+            ctypes.sizeof(pbi),
+            ctypes.byref(result_length),
+        )
+        if status != 0:
+            raise OSError(f"NtQueryInformationProcess={status}")
+
+        peb = read_struct(handle, pbi.PebBaseAddress, Peb)
+        params = read_struct(handle, peb.ProcessParameters, ProcessParameters)
+        dos_path = params.CurrentDirectory.DosPath
+        if not dos_path.Buffer or dos_path.Length == 0:
+            return ""
+
+        raw = ctypes.create_string_buffer(dos_path.Length)
+        read = ctypes.c_size_t()
+        ok = read_process_memory(handle, dos_path.Buffer, raw, dos_path.Length, ctypes.byref(read))
+        if not ok:
+            raise OSError(ctypes.get_last_error())
+        return raw.raw.decode("utf-16-le", errors="ignore")
+    finally:
+        close_handle(handle)
+
+
+def _windows_directory_lock_candidates(path: Path, process_names: tuple[str, ...]) -> list[dict[str, str]]:
+    """Return processes whose current directory is the target kit path."""
+    target = str(path.resolve()).rstrip("\\/").casefold()
+    matches: list[dict[str, str]] = []
+    for row in _windows_process_snapshot(process_names):
+        pid_text = row.get("pid", "")
+        if not pid_text.isdigit():
+            continue
+        try:
+            cwd = _windows_process_current_directory(int(pid_text))
+        except Exception:
+            continue
+        normalized = cwd.rstrip("\\/").casefold()
+        if normalized == target or normalized.startswith(target + "\\"):
+            copy = dict(row)
+            copy["cwd"] = cwd
+            matches.append(copy)
+    return matches
+
+
+def _terminate_windows_python_cwd_processes(path: Path) -> list[int]:
+    """Stop stale Python processes whose current directory is the kit folder."""
+    stopped: list[int] = []
+    for row in _windows_directory_lock_candidates(path, ("python.exe", "py.exe")):
+        pid_text = row.get("pid", "")
+        if not pid_text.isdigit():
+            continue
+        pid = int(pid_text)
+        try:
+            subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", f"Stop-Process -Id {pid} -Force"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            stopped.append(pid)
+        except Exception:
+            continue
+    return stopped
+
+
+def _remove_tree_with_lock_cleanup(path: Path) -> None:
+    """Remove a kit directory and handle the common stale-Python lock case on Windows."""
+    try:
+        shutil.rmtree(path)
+        return
+    except OSError as exc:
+        if os.name != "nt" or not _looks_like_windows_lock_error(exc):
+            raise
+
+    stopped = _terminate_windows_python_cwd_processes(path)
+    if stopped:
+        time.sleep(0.2)
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError:
+            pass
+
+    lockers = _windows_directory_lock_candidates(path, ("python.exe", "py.exe", "cmd.exe", "powershell.exe"))
+    if lockers:
+        details = ", ".join(
+            f"{row['name']} pid {row['pid']} ({row.get('cwd', '')})"
+            for row in lockers
+        )
+        raise OSError(f"Could not remove {path}; close these processes first: {details}")
+    shutil.rmtree(path)
+
+
 def _write_researcher_assignment(
     *,
     path: Path,
@@ -789,7 +1028,7 @@ Use the launcher in this folder and do the rest of the work in the browser app. 
 2. This kit only includes the launcher for the machine it was prepared for.
 3. Keep the command window or terminal open while you work.
 4. The browser app should open on its own. If it does not, copy the localhost URL shown in the launcher window into your browser.
-5. Complete the participant profile, read the onboarding page, and click **Begin Study**.
+5. Use the onboarding window to complete the participant profile, then click **Begin Study**.
 
 ## 3) In-App Assistant
 {runtime_lines}
@@ -1133,7 +1372,7 @@ def build_participant_kit(args: argparse.Namespace) -> None:
             raise FileExistsError(
                 f"Kit already exists: {kit_dir}. Use --overwrite to replace it."
             )
-        shutil.rmtree(kit_dir)
+        _remove_tree_with_lock_cleanup(kit_dir)
 
     (run_dir / "edits").mkdir(parents=True, exist_ok=True)
     # Keep an immutable baseline snapshot so participants can copy from it while
@@ -1339,7 +1578,7 @@ def clean_participant_kits(args: argparse.Namespace) -> None:
         if args.dry_run:
             print(f"[DRY RUN] would remove: {d}")
         else:
-            shutil.rmtree(d)
+            _remove_tree_with_lock_cleanup(d)
             print(f"Removed: {d}")
             removed += 1
 

@@ -40,8 +40,7 @@ RepairAudit/
 |   |-- study_cli.py                         # Unified CLI entrypoint for all workflow stages
 |   |-- participant_kit.py                   # Kit builder and kit cleanup logic
 |   |-- participant_web_app_template.py      # Template copied into each kit as participant_web_app.py
-|   |-- privacy_check.py                     # Pre-publish privacy scanner used by the CLI and researcher GUI
-|   `-- __init__.py                          # Package marker
+|   `-- privacy_check.py                     # Pre-publish privacy scanner used by the CLI and researcher GUI
 |
 |-- tools/
 |   |-- analysis/
@@ -51,19 +50,16 @@ RepairAudit/
 |   |   |-- interaction.py                   # Merge snippet_log.csv fields into results.csv
 |   |   |-- metrics.py                       # Build summary.json and summary.txt from results.csv
 |   |   |-- modeling.py                      # Snippet-level modeling dataset + local fixed-effects logit
-|   |   |-- stats.py                         # Aggregate descriptive/inferential stats helpers
-|   |   `-- __init__.py
+|   |   `-- stats.py                         # Aggregate descriptive/inferential stats helpers
 |   |
 |   |-- instrumentation/
 |   |   |-- capture_env.py                   # Public-safe environment snapshot
 |   |   |-- diff_runner.py                   # Unified diffs + line-change counts
 |   |   |-- snippet_timer.py                 # Optional per-snippet timing event writer
-|   |   |-- start_timer.py                   # Run-level start/end timing writer
-|   |   `-- __init__.py
+|   |   `-- start_timer.py                   # Run-level start/end timing writer
 |   |
 |   |-- reporting/
-|   |   |-- html_report.py                   # Aggregated offline HTML report generator
-|   |   `-- __init__.py
+|   |   `-- html_report.py                   # Aggregated offline HTML report generator
 |   |
 |   |-- domain_classification/
 |   |   |-- classify.py                      # Append expertise labels to a raw CWE/sample dataset with Ollama
@@ -122,6 +118,8 @@ Dependencies in `requirements.txt`:
 - `pyyaml>=6.0`
 - `jinja2>=3.1.0`
 
+The requirements file is intentionally short. GUI, HTTP, CSV, zip, and packaging work in this repo use the Python standard library.
+
 ## 3.1) GitHub Publish Checklist
 Before pushing or sharing the repo, clear generated study artifacts:
 - `participant_kits/` contents
@@ -131,6 +129,7 @@ Before pushing or sharing the repo, clear generated study artifacts:
 - `data/datasets/classified/dataset_classified_skipped.csv`
 - `data/datasets/classified/dataset_participant_ready.csv`
 - `data/datasets/classified/dataset_participant_rejected.csv`
+- `data/datasets/classified/classify.log`
 - `tmp_*/` scratch folders
 - root helper scripts prefixed with `_`
 
@@ -142,17 +141,12 @@ Note:
 
 ## 4) Pipeline Flow
 Normal researcher flow:
-1. Prepare or refresh the classified dataset used for kit sampling.
+1. Prepare the participant-ready dataset or the file-backed snippet metadata set.
 2. Generate participant kits.
-3. Distribute kits.
-4. Receive participant ZIP submissions.
-5. Extract each returned submission ZIP into `runs/<phase>/` so the archive creates `runs/<phase>/<participant_id>/`.
-6. Analyze each run.
-7. Merge interaction logs.
-8. Aggregate pilot metrics.
-9. Compute stats.
-10. Compute snippet-level models.
-11. Build HTML report.
+3. Distribute kits and collect participant ZIP submissions.
+4. Extract each returned ZIP into `runs/<phase>/` so it creates `runs/<phase>/<participant_id>/`.
+5. Run `analyze-run` and `merge-interaction` for each participant.
+6. Run `aggregate-pilot`, `compute-stats`, `compute-models`, and `build-report`.
 
 High-level command map:
 ```powershell
@@ -215,6 +209,7 @@ Behavior:
 - the kit sampler filters the dataset by selected expertise areas using both `primary_expertise_area` and `secondary_expertise_areas`
 - it then selects `3` `low`, `3` `medium`, and `3` `high` samples by default
 - if a hardness bucket does not have enough expertise matches, the sampler backfills from the same hardness bucket
+- the `build-participant-kit` command still uses the historical flag name `--metadata_csv`, but for dataset-backed kits that argument should point at the source CSV you want sampled
 
 ### 6.2 Snippet metadata contract
 File: `data/metadata/snippet_metadata.csv`
@@ -267,7 +262,7 @@ Classification flow:
 .venv\Scripts\python.exe tools\domain_classification\classify.py ^
   --input path\to\raw_source.csv ^
   --output data/datasets/classified/dataset_classified.csv ^
-  --model qwen2.5-coder:7b-instruct ^
+  --model qwen3.6:27b ^
   --fresh
 ```
 3. Verify the distribution:
@@ -286,6 +281,7 @@ Classification flow:
 
 Notes:
 - the large classified CSV is intentionally local-only and gitignored
+- `classify.py` writes `classify.log` next to the output CSV during a run
 - the kit builder prefers `dataset_participant_ready.csv` when it exists
 - the taxonomy used by both the classifier and kit builder lives in `tools/domain_classification/expertise_areas.jsonl`
 
@@ -389,12 +385,8 @@ Notes:
 2. Zip that folder or send the folder as-is.
 3. Tell the participant to:
    - make sure Python is installed on the machine that will launch the kit
-   - treat that Python requirement as a launcher/runtime requirement, not as a restriction on snippet language
-   - check the kit README for the assigned LLM endpoint
-   - connect to VPN or campus network first if your lab endpoint requires it
-   - use only the launcher and browser app; do not edit the hidden support files
-   - do not change the locked endpoint or model in the kit files
-   - run the one launcher included in the kit folder
+   - check the kit README for any network or endpoint requirement before starting
+   - use only the launcher and browser app; do not edit the hidden support files or change the locked endpoint/model
    - complete every assigned snippet and use `Finish (Build ZIP)` at the end
 4. The participant returns the ZIP created in the kit's `exports/` folder.
 

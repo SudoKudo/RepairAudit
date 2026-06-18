@@ -4,9 +4,11 @@ import argparse
 import csv
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 MODULE_PATH = (
@@ -388,6 +390,34 @@ class ParticipantKitSelectionTests(unittest.TestCase):
 
             self.assertFalse(participant_dir.exists())
             self.assertTrue(reserved_dir.exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows lock cleanup test is Windows-only.")
+    def test_remove_tree_with_lock_cleanup_retries_after_stale_python_stop(self) -> None:
+        target = Path("C:/temp/fake_kit")
+        calls: list[str] = []
+
+        def fake_rmtree(path: Path) -> None:
+            calls.append(str(path))
+            if len(calls) == 1:
+                raise OSError(
+                    "The process cannot access the file because it is being used by another process."
+                )
+
+        with patch.object(participant_kit.shutil, "rmtree", side_effect=fake_rmtree):
+            with patch.object(
+                participant_kit,
+                "_terminate_windows_python_cwd_processes",
+                return_value=[1234],
+            ) as stop_mock:
+                with patch.object(
+                    participant_kit,
+                    "_windows_directory_lock_candidates",
+                    return_value=[],
+                ):
+                    participant_kit._remove_tree_with_lock_cleanup(target)
+
+        stop_mock.assert_called_once_with(target)
+        self.assertEqual(calls, [str(target), str(target)])
 
 
 if __name__ == "__main__":

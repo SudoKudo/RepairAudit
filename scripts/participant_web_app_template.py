@@ -13,6 +13,7 @@ import os
 import secrets
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import webbrowser
@@ -41,6 +42,17 @@ def _parse_utc_timestamp(value: object) -> datetime | None:
         return datetime.fromisoformat(text)
     except Exception:
         return None
+
+
+def _move_runtime_cwd_off_kit(kit_root: Path) -> None:
+    """Move the process cwd off the participant kit so stale processes do not pin the folder."""
+    try:
+        current = Path.cwd().resolve()
+        root = kit_root.resolve()
+        if current == root or root in current.parents:
+            os.chdir(tempfile.gettempdir())
+    except Exception:
+        pass
 
 
 def _seconds_between(start_text: object, end_text: object) -> float:
@@ -2961,6 +2973,7 @@ def run_server() -> None:
     kit_root = Path(__file__).resolve().parent
     pid_path = kit_root / "participant_web_app.pid"
     store = StudyStore(kit_root)
+    _move_runtime_cwd_off_kit(kit_root)
     store.resume_session_if_started()
 
     AppHandler.store = store

@@ -25,6 +25,12 @@ from tools.analysis.interaction import (
 from tools.analysis.metrics import write_summary_files
 from tools.analysis.modeling import write_model_artifacts
 from tools.analysis.stats import write_pilot_stats_text
+from tools.domain_classification.participant_ready import (
+    DEFAULT_CLASSIFIED_INPUT_PATH,
+    DEFAULT_PARTICIPANT_READY_PATH,
+    DEFAULT_REJECTED_PATH,
+    build_participant_ready_dataset,
+)
 from tools.instrumentation.capture_env import capture_env
 from tools.instrumentation.diff_runner import make_diff
 from tools.instrumentation.snippet_timer import mark as mark_snippet_time
@@ -36,7 +42,9 @@ from scripts.privacy_check import run_prepublish_check
 
 DEFAULT_METADATA_PATH = Path("data") / "metadata" / "snippet_metadata.csv"
 DEFAULT_KIT_SOURCE_PATH = (
-    Path("data") / "datasets" / "classified" / "dataset_classified.csv"
+    DEFAULT_PARTICIPANT_READY_PATH
+    if DEFAULT_PARTICIPANT_READY_PATH.exists()
+    else DEFAULT_CLASSIFIED_INPUT_PATH
 )
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -992,6 +1000,25 @@ def cmd_make_test_runs(args: argparse.Namespace) -> None:
 
     print(f"Created synthetic runs in: {runs_root}")
 
+
+def cmd_build_participant_ready_dataset(args: argparse.Namespace) -> None:
+    """Filter the raw classified dataset down to participant-ready kit rows."""
+    summary = build_participant_ready_dataset(
+        input_csv=Path(args.input_csv),
+        output_csv=Path(args.output_csv),
+        rejected_output_csv=Path(args.rejected_csv) if args.rejected_csv else None,
+    )
+    print(f"Input rows:             {summary['total_rows']}")
+    print(f"Participant-ready rows: {summary['ready_rows']}")
+    print(f"Rejected rows:          {summary['rejected_rows']}")
+    print(f"Output CSV:             {summary['output_csv']}")
+    if summary["rejected_output_csv"]:
+        print(f"Rejected CSV:           {summary['rejected_output_csv']}")
+    if summary["issue_counts"]:
+        print("Rejection reasons:")
+        for key, value in sorted(summary["issue_counts"].items()):
+            print(f"  - {key}: {value}")
+
 def build_parser() -> argparse.ArgumentParser:
     """Create top-level parser with subcommands for each workflow action."""
     ap = argparse.ArgumentParser(description="Unified workflow CLI for the study repository.")
@@ -1053,6 +1080,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_make.add_argument("--core-only", action="store_true", help="Create TEST001-TEST003 only.")
     p_make.set_defaults(func=cmd_make_test_runs)
 
+    p_ready = sub.add_parser(
+        "build-participant-ready-dataset",
+        help="Filter the classified dataset down to participant-ready kit rows.",
+    )
+    p_ready.add_argument("--input_csv", default=str(DEFAULT_CLASSIFIED_INPUT_PATH))
+    p_ready.add_argument("--output_csv", default=str(DEFAULT_PARTICIPANT_READY_PATH))
+    p_ready.add_argument("--rejected_csv", default=str(DEFAULT_REJECTED_PATH))
+    p_ready.set_defaults(func=cmd_build_participant_ready_dataset)
+
     p_kit = sub.add_parser(
         "build-participant-kit",
         help="Create a participant-facing kit from a source CSV and locked study settings.",
@@ -1103,7 +1139,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_kit.add_argument("--temperature", type=float, default=0.2)
     p_kit.add_argument("--top_p", type=float, default=0.9)
     p_kit.add_argument("--top_k", type=int, default=40)
-    p_kit.add_argument("--num_predict", type=int, default=1024)
+    p_kit.add_argument("--num_predict", type=int, default=1536)
     p_kit.add_argument("--seed", type=int, default=42)
     p_kit.add_argument("--overwrite", action="store_true")
     p_kit.set_defaults(func=cmd_build_participant_kit)

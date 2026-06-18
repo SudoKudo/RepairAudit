@@ -53,6 +53,9 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                     "language": "Python",
                     "hardness_strict": "low",
                     "code_sample": "print('low1')",
+                    "is_vulnerable": "1",
+                    "cwe_primary": "CWE-89",
+                    "vulnerability_type": "Injection",
                     "primary_expertise_area": "Backend / API Development",
                     "secondary_expertise_areas": "[]",
                     "file_path": "src/low1.py",
@@ -62,6 +65,9 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                     "language": "Python",
                     "hardness_strict": "low",
                     "code_sample": "print('low2')",
+                    "is_vulnerable": "1",
+                    "cwe_primary": "CWE-89",
+                    "vulnerability_type": "Injection",
                     "primary_expertise_area": "Backend / API Development",
                     "secondary_expertise_areas": "[]",
                     "file_path": "src/low2.py",
@@ -71,6 +77,9 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                     "language": "Python",
                     "hardness_strict": "low",
                     "code_sample": "print('low3')",
+                    "is_vulnerable": "1",
+                    "cwe_primary": "CWE-89",
+                    "vulnerability_type": "Injection",
                     "primary_expertise_area": "General Software Utility",
                     "secondary_expertise_areas": "[]",
                     "file_path": "src/low3.py",
@@ -80,15 +89,33 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                     "language": "Python",
                     "hardness_strict": "low",
                     "code_sample": "print('low4')",
+                    "is_vulnerable": "1",
+                    "cwe_primary": "CWE-89",
+                    "vulnerability_type": "Injection",
                     "primary_expertise_area": "Security / Application Security",
                     "secondary_expertise_areas": "[]",
                     "file_path": "src/low4.py",
+                },
+                {
+                    "sample_id": "LOW_BAD",
+                    "language": "Python",
+                    "hardness_strict": "low",
+                    "code_sample": "print('bad row')",
+                    "is_vulnerable": "1",
+                    "cwe_primary": "NVD-CWE-NOINFO",
+                    "vulnerability_type": "Unknown/Unspecified",
+                    "primary_expertise_area": "Backend / API Development",
+                    "secondary_expertise_areas": "[]",
+                    "file_path": "src/low_bad.py",
                 },
                 {
                     "sample_id": "MED001",
                     "language": "Java",
                     "hardness_strict": "medium",
                     "code_sample": "class Med1 {}",
+                    "is_vulnerable": "1",
+                    "cwe_primary": "CWE-79",
+                    "vulnerability_type": "Injection",
                     "primary_expertise_area": "Backend / API Development",
                     "secondary_expertise_areas": "[]",
                     "file_path": "src/Med1.java",
@@ -98,6 +125,9 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                     "language": "Java",
                     "hardness_strict": "medium",
                     "code_sample": "class Med2 {}",
+                    "is_vulnerable": "1",
+                    "cwe_primary": "CWE-79",
+                    "vulnerability_type": "Injection",
                     "primary_expertise_area": "Database / Persistence",
                     "secondary_expertise_areas": "[]",
                     "file_path": "src/Med2.java",
@@ -107,6 +137,9 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                     "language": "Java",
                     "hardness_strict": "medium",
                     "code_sample": "class Med3 {}",
+                    "is_vulnerable": "1",
+                    "cwe_primary": "CWE-79",
+                    "vulnerability_type": "Injection",
                     "primary_expertise_area": "Frontend / UI Engineering",
                     "secondary_expertise_areas": "[]",
                     "file_path": "src/Med3.java",
@@ -116,6 +149,9 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                     "language": "Java",
                     "hardness_strict": "medium",
                     "code_sample": "class Med4 {}",
+                    "is_vulnerable": "1",
+                    "cwe_primary": "CWE-79",
+                    "vulnerability_type": "Injection",
                     "primary_expertise_area": "General Software Utility",
                     "secondary_expertise_areas": "[]",
                     "file_path": "src/Med4.java",
@@ -125,6 +161,9 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                     "language": "C",
                     "hardness_strict": "high",
                     "code_sample": "int high1(void) { return 1; }",
+                    "is_vulnerable": "1",
+                    "cwe_primary": "CWE-119",
+                    "vulnerability_type": "Bounds Error",
                     "primary_expertise_area": "Backend / API Development",
                     "secondary_expertise_areas": "[]",
                     "file_path": "src/high1.c",
@@ -134,6 +173,9 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                     "language": "C",
                     "hardness_strict": "high",
                     "code_sample": "int high2(void) { return 2; }",
+                    "is_vulnerable": "1",
+                    "cwe_primary": "CWE-119",
+                    "vulnerability_type": "Bounds Error",
                     "primary_expertise_area": "Backend / API Development",
                     "secondary_expertise_areas": "[]",
                     "file_path": "src/high2.c",
@@ -143,6 +185,9 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                     "language": "C",
                     "hardness_strict": "high",
                     "code_sample": "int high3(void) { return 3; }",
+                    "is_vulnerable": "1",
+                    "cwe_primary": "CWE-119",
+                    "vulnerability_type": "Bounds Error",
                     "primary_expertise_area": "Backend / API Development",
                     "secondary_expertise_areas": "[]",
                     "file_path": "src/high3.c",
@@ -152,6 +197,9 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                     "language": "C",
                     "hardness_strict": "high",
                     "code_sample": "int high4(void) { return 4; }",
+                    "is_vulnerable": "1",
+                    "cwe_primary": "CWE-119",
+                    "vulnerability_type": "Bounds Error",
                     "primary_expertise_area": "Networking / Distributed Systems",
                     "secondary_expertise_areas": "[]",
                     "file_path": "src/high4.c",
@@ -188,7 +236,8 @@ class ParticipantKitSelectionTests(unittest.TestCase):
             try:
                 participant_kit.build_participant_kit(args)
 
-                run_dir = out_root / "P777" / "run_pilot_P777"
+                support_dir = out_root / "P777" / participant_kit.PARTICIPANT_SUPPORT_DIR_NAME
+                run_dir = support_dir / "run_pilot_P777"
                 self.assertTrue(researcher_map.exists())
 
                 assignment = json.loads((run_dir / "study_assignment.json").read_text(encoding="utf-8"))
@@ -203,10 +252,15 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                         fallback_seen = True
                 self.assertEqual(bucket_counts, {"low": 3, "medium": 3, "high": 3})
                 self.assertTrue(fallback_seen)
+                self.assertNotIn("LOW_BAD", {row["source_snippet_id"] for row in selected})
 
                 baseline_files = sorted((run_dir / "baseline").iterdir())
                 edit_files = sorted((run_dir / "edits").iterdir())
                 participant_readme = (out_root / "P777" / "README.md").read_text(encoding="utf-8")
+                self.assertTrue(support_dir.exists())
+                self.assertTrue((support_dir / "participant_web_app.py").exists())
+                self.assertTrue((support_dir / "study_config.lock.json").exists())
+                self.assertFalse((out_root / "P777" / "participant_web_app.py").exists())
                 self.assertEqual(len(baseline_files), 9)
                 self.assertEqual(len(edit_files), 9)
                 self.assertTrue(all(file.read_text(encoding="utf-8") == "" for file in edit_files))
@@ -246,6 +300,9 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                             "language": "C/C++",
                             "hardness_strict": bucket,
                             "code_sample": f"int {bucket}_{idx}(void) {{ return {idx}; }}",
+                            "is_vulnerable": "1",
+                            "cwe_primary": "CWE-119",
+                            "vulnerability_type": "Bounds Error",
                             "primary_expertise_area": "Security / Application Security",
                             "secondary_expertise_areas": "[]",
                             "file_path": f"src/{bucket}_{idx}.c",
@@ -282,15 +339,19 @@ class ParticipantKitSelectionTests(unittest.TestCase):
             try:
                 participant_kit.build_participant_kit(args)
 
-                run_dir = out_root / "P888" / "run_pilot_P888"
+                support_dir = out_root / "P888" / participant_kit.PARTICIPANT_SUPPORT_DIR_NAME
+                run_dir = support_dir / "run_pilot_P888"
                 assignment = json.loads((run_dir / "study_assignment.json").read_text(encoding="utf-8"))
                 selected = json.loads(researcher_map.read_text(encoding="utf-8"))["snippet_mappings"]
-                manifest = json.loads((out_root / "P888" / "kit_manifest.json").read_text(encoding="utf-8"))
+                manifest = json.loads((support_dir / "kit_manifest.json").read_text(encoding="utf-8"))
                 participant_readme = (out_root / "P888" / "README.md").read_text(encoding="utf-8")
 
                 self.assertEqual(len(selected), 9)
                 self.assertTrue(all(row["source_snippet_id"].startswith("primevul:") for row in selected))
                 self.assertTrue(all(sid.startswith("S") for sid in assignment["snippet_ids"]))
+                self.assertTrue((support_dir / "participant_web_app.py").exists())
+                self.assertTrue((support_dir / "package_submission.py").exists())
+                self.assertFalse((out_root / "P888" / "package_submission.py").exists())
 
                 output_names = [path.name for path in (run_dir / "baseline").iterdir()]
                 self.assertTrue(all(":" not in name for name in output_names))

@@ -109,8 +109,9 @@ class StudyStore:
     def __init__(self, kit_root: Path) -> None:
         """Bind the participant kit paths and load the locked study configuration."""
         self.kit_root = kit_root
+        self.public_root = kit_root.parent if (kit_root.parent / "README.md").exists() else kit_root
         self.lock_path = kit_root / "study_config.lock.json"
-        self.readme_path = kit_root / "README.md"
+        self.readme_path = self.public_root / "README.md"
         self.packager_path = kit_root / "package_submission.py"
 
         self.lock_data = self._read_json(self.lock_path)
@@ -1220,11 +1221,11 @@ function snippetLanguageLabel(sid){
 }
 
 function normalizeSnippetText(text){
-  return String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  return String(text || "").replace(/\\r\\n/g, "\\n").replace(/\\r/g, "\\n");
 }
 
 function looksFlattenedCode(text){
-  var lines = normalizeSnippetText(text).split("\n").filter(function(line){
+  var lines = normalizeSnippetText(text).split("\\n").filter(function(line){
     return line.trim() !== "";
   });
   if(lines.length <= 1){
@@ -1340,7 +1341,7 @@ function formatFlatCStyleCode(text){
         rawLines.push(commentPiece);
       }
       token = [];
-      var lineEnd = text.indexOf("\n", index + 2);
+      var lineEnd = text.indexOf("\\n", index + 2);
       if(lineEnd === -1){
         var tail = text.slice(index).trim();
         var splitTail = splitDenseCommentLine(tail);
@@ -1363,7 +1364,7 @@ function formatFlatCStyleCode(text){
         index += 1;
         continue;
       }
-      if(ch === "\\"){
+      if(ch === "\\\\"){
         escaping = true;
         index += 1;
         continue;
@@ -1375,7 +1376,7 @@ function formatFlatCStyleCode(text){
       continue;
     }
 
-    if(ch === "\"" || ch === "'"){
+    if(ch === "\\\"" || ch === "'"){
       inString = ch;
       index += 1;
       continue;
@@ -1425,7 +1426,7 @@ function formatFlatCStyleCode(text){
       }
     }
   }
-  return lines.join("\n");
+  return lines.join("\\n");
 }
 
 function formatBaselineForDisplay(text, sid){
@@ -1448,15 +1449,15 @@ function formatBaselineForDisplay(text, sid){
     ".ts": true
   };
   if(cLike[ext] && looksFlattenedCode(normalized)){
-    normalized = formatFlatCStyleCode(
-      normalized
-        .split("\n")
+      normalized = formatFlatCStyleCode(
+        normalized
+        .split("\\n")
         .map(function(line){ return line.trim(); })
         .filter(function(line){ return line !== ""; })
         .join(" ")
     );
   }
-  return normalized + "\n";
+  return normalized + "\\n";
 }
 
 function renderSidebar(){
@@ -2380,6 +2381,28 @@ class AppHandler(BaseHTTPRequestHandler):
             pass
         super().log_message(format, *args)
 
+    def _shutdown_server_soon(self, delay_seconds: float = 0.35) -> None:
+        """Stop the local app shortly after the current response is flushed."""
+        if self.shutdown_now:
+            return
+
+        AppHandler.shutdown_now = True
+        server = self.server
+        store = self.store
+
+        def _stop() -> None:
+            time.sleep(max(0.0, float(delay_seconds)))
+            try:
+                store.mark_end()
+            except Exception:
+                pass
+            try:
+                server.shutdown()
+            except Exception:
+                pass
+
+        threading.Thread(target=_stop, daemon=True).start()
+
     def _post_security_ok(self) -> tuple[bool, str]:
         """Require same-origin + CSRF token for state-changing requests."""
         origin = (self.headers.get("Origin") or "").strip()
@@ -2507,6 +2530,67 @@ class AppHandler(BaseHTTPRequestHandler):
             if key in llm and llm.get(key) is not None and str(llm.get(key)).strip() != "":
                 opts[key] = llm.get(key)
         return opts
+
+    def _participant_chat_system_prompt(self) -> str:
+        """Keep participant-side repair replies compact and easy to paste back into the kit."""
+        return (
+            "You are assisting with a code repair task. "
+            "When the user pastes code and asks for a fix, return the repaired code first. "
+            "Unless the user explicitly asks for explanation, do not include prose before the code. "
+            "Do not use markdown fences. Preserve the original programming language and formatting style. "
+            "Keep any explanation after the code brief."
+        )
+
+    def _ollama_message_text(self, resp: dict[str, object]) -> str:
+        """Extract assistant text from either Ollama chat or generate style responses."""
+        msg_obj = resp.get("message", {})
+        assistant_text = ""
+        if isinstance(msg_obj, dict):
+            assistant_text = str(msg_obj.get("content", "") or "")
+        if not assistant_text.strip():
+            assistant_text = str(resp.get("response", "") or "")
+        return assistant_text
+
+    def _merge_assistant_chunks(self, first: str, second: str) -> str:
+        """Join two assistant chunks without forcing duplicated blank lines."""
+        if not first:
+            return second
+        if not second:
+            return first
+        if first.endswith(("\n", " ", "\t")) or second.startswith(("\n", " ", "\t")):
+            return first + second
+        return first + "\n" + second
+
+    def _continue_truncated_chat(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, str]],
+        options: dict[str, object],
+        partial_assistant_text: str,
+    ) -> dict[str, object]:
+        """Ask the model for one continuation chunk when the first reply hits the length cap."""
+        continuation_messages = list(messages)
+        continuation_messages.append({"role": "assistant", "content": partial_assistant_text})
+        continuation_messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Continue from the exact point where you stopped. "
+                    "Return only the remaining code or remaining brief explanation. "
+                    "Do not repeat earlier text. Do not add markdown fences."
+                ),
+            }
+        )
+        continuation_payload: dict[str, object] = {
+            "model": model,
+            "messages": continuation_messages,
+            "stream": False,
+            "think": False,
+        }
+        if options:
+            continuation_payload["options"] = options
+        return self._ollama_request("/api/chat", continuation_payload, timeout=240.0)
 
     def do_GET(self) -> None:  # noqa: N802
         """Serve HTML and read-only API endpoints for the participant browser app."""
@@ -2753,7 +2837,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     snippet_id,
                     max_chars=min(self.store.max_chat_context_chars, context_budget),
                 )
-                msgs = prior + [{"role": "user", "content": prompt}]
+                msgs = [{"role": "system", "content": self._participant_chat_system_prompt()}] + prior + [{"role": "user", "content": prompt}]
                 payload: dict[str, object] = {
                     "model": model,
                     "messages": msgs,
@@ -2770,17 +2854,26 @@ class AppHandler(BaseHTTPRequestHandler):
                     self._json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
                     return
 
-                msg_obj = resp.get("message", {})
-                assistant_text = ""
-                if isinstance(msg_obj, dict):
-                    assistant_text = str(msg_obj.get("content", "") or "")
-                if not assistant_text.strip():
-                    assistant_text = str(resp.get("response", "") or "")
+                assistant_text = self._ollama_message_text(resp)
                 if not assistant_text.strip():
                     self._json({"error": "The assigned LLM returned an empty response."}, status=HTTPStatus.BAD_REQUEST)
                     return
                 done_reason = str(resp.get("done_reason", "") or "").strip().lower()
                 truncated = done_reason == "length"
+                if truncated:
+                    try:
+                        cont_resp = self._continue_truncated_chat(
+                            model=model,
+                            messages=msgs,
+                            options=options,
+                            partial_assistant_text=assistant_text,
+                        )
+                        cont_text = self._ollama_message_text(cont_resp)
+                        if cont_text.strip():
+                            assistant_text = self._merge_assistant_chunks(assistant_text, cont_text)
+                            truncated = str(cont_resp.get("done_reason", "") or "").strip().lower() == "length"
+                    except Exception:
+                        pass
 
                 user_entry = self.store.append_turn(
                     snippet_id=snippet_id,
@@ -2847,6 +2940,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 code, output = self.store.build_submission_zip()
                 if code == 0:
                     self._json({"ok": True, "message": "Submission ZIP created successfully in exports/."})
+                    self.close_connection = True
+                    self._shutdown_server_soon()
                 else:
                     self._json(
                         {
@@ -2864,6 +2959,7 @@ class AppHandler(BaseHTTPRequestHandler):
 def run_server() -> None:
     """Start local participant web app and open the default browser."""
     kit_root = Path(__file__).resolve().parent
+    pid_path = kit_root / "participant_web_app.pid"
     store = StudyStore(kit_root)
     store.resume_session_if_started()
 
@@ -2893,9 +2989,13 @@ def run_server() -> None:
         return
 
     AppHandler.allowed_origin = f"http://127.0.0.1:{chosen_port}"
+    try:
+        pid_path.write_text(str(os.getpid()), encoding="utf-8")
+    except Exception:
+        pass
 
     def open_browser() -> None:
-        """Launch Edge first for consistency; fall back to default browser."""
+        """Launch one participant browser window without opening an extra blank one."""
         # Add cache-busting query so participants always receive the latest app script.
         url = f"http://127.0.0.1:{chosen_port}/?v={int(time.time())}"
         local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
@@ -2909,13 +3009,13 @@ def run_server() -> None:
         for edge_path in edge_candidates:
             if edge_path.exists():
                 try:
-                    subprocess.Popen([str(edge_path), url])
+                    subprocess.Popen([str(edge_path), "--new-window", "--app=" + url])
                     print(f"[launch] Opened Edge: {edge_path}")
                     return
                 except Exception:
                     pass
 
-        webbrowser.open(url)
+        webbrowser.open_new(url)
 
     # Allow headless/debug runs without popping a browser window.
     if os.getenv("STUDY_WEBAPP_NO_BROWSER", "").strip().lower() not in {"1", "true", "yes", "y"}:
@@ -2963,6 +3063,11 @@ def run_server() -> None:
         pass
     finally:
         server.server_close()
+        try:
+            if pid_path.exists() and pid_path.read_text(encoding="utf-8").strip() == str(os.getpid()):
+                pid_path.unlink()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     run_server()

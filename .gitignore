@@ -73,3 +73,5 @@ tools/domain_classification/dataset.csv
 /tools/domain_classification/dataset_classified_skipped.csv
 /data/datasets/classified/dataset_classified.csv
 /data/datasets/classified/dataset_classified_skipped.csv
+/data/datasets/classified/dataset_participant_ready.csv
+/data/datasets/classified/dataset_participant_rejected.csv

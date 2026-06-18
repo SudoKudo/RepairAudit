@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from tools.domain_classification.participant_ready import is_participant_ready_row
+
 HARDNESS_BUCKETS = ("low", "medium", "high")
 HARDNESS_ALIASES = {
     "low": "low",
@@ -61,6 +63,7 @@ PARTICIPANT_OS_LAUNCHERS = {
     "macos": "Launch_Study_Web_App.sh",
     "linux": "Launch_Study_Web_App.sh",
 }
+PARTICIPANT_SUPPORT_DIR_NAME = ".repairaudit"
 
 
 def _configure_csv_field_limit() -> None:
@@ -366,6 +369,8 @@ def _load_dataset_rows(dataset_csv: Path) -> list[dict[str, str]]:
                 continue
 
             normalized_row = {str(key): _clean_text(value) for key, value in row.items()}
+            if not is_participant_ready_row(normalized_row):
+                continue
             normalized_row["source_kind"] = "dataset"
             normalized_row["snippet_id"] = sample_id
             normalized_row.setdefault("sample_id", sample_id)
@@ -378,7 +383,10 @@ def _load_dataset_rows(dataset_csv: Path) -> list[dict[str, str]]:
             rows.append(normalized_row)
 
     if not rows:
-        raise ValueError(f"No usable dataset rows found in CSV: {dataset_csv}")
+        raise ValueError(
+            f"No participant-ready dataset rows found in CSV: {dataset_csv}. "
+            "Build a participant-ready dataset first or inspect the row filters."
+        )
     return rows
 
 
@@ -570,6 +578,21 @@ def _write_kit_manifest(
     (kit_dir / "kit_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
+def _hide_participant_support_dir(path: Path, participant_os: str) -> None:
+    """Hide the support folder on Windows so participants only see the launcher and README."""
+    if participant_os != "windows":
+        return
+    try:
+        subprocess.run(
+            ["attrib", "+h", str(path)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+
 def _write_researcher_assignment(
     *,
     path: Path,
@@ -756,7 +779,7 @@ def _write_participant_readme(
         )
     content = f"""# RepairAudit Participant Kit
 
-This folder contains the app, the locked settings, and the packager used to return your work. Use the browser app for the study instructions.
+Use the launcher in this folder and do the rest of the work in the browser app. You should not need to open or edit any other files in the kit.
 
 ## 1) Before You Start
 {setup_lines}
@@ -803,9 +826,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-KIT_ROOT = Path(__file__).resolve().parent
-RUN_DIR = KIT_ROOT / "{run_dir_name}"
-EXPORTS = KIT_ROOT / "exports"
+APP_ROOT = Path(__file__).resolve().parent
+PUBLIC_ROOT = APP_ROOT.parent if (APP_ROOT.parent / "README.md").exists() else APP_ROOT
+RUN_DIR = APP_ROOT / "{run_dir_name}"
+EXPORTS = PUBLIC_ROOT / "exports"
 LOG_CSV = RUN_DIR / "logs" / "snippet_log.csv"
 CHAT_LOG = RUN_DIR / "logs" / "chat_log.jsonl"
 PROFILE_JSON = RUN_DIR / "logs" / "participant_profile.json"
@@ -1025,11 +1049,19 @@ def _write_participant_launcher(*, kit_dir: Path, participant_os: str) -> None:
     """Write only the launcher needed for the participant's operating system."""
     launcher_bat = r"""@echo off
 setlocal
-cd /d %~dp0
+set "APP_ROOT=%~dp0__APP_DIR__"
+set PYTHONDONTWRITEBYTECODE=1
+
+if not exist "%APP_ROOT%\participant_web_app.py" (
+  echo Support files are missing from this kit.
+  exit /b 1
+)
 
 REM Clear stale participant web-app Python processes so this kit always starts clean.
 REM This avoids "port already in use" conflicts from previous kits/sessions.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -match 'participant_web_app\.py' } | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {} }" >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$appRoot = [System.IO.Path]::GetFullPath('%APP_ROOT%'); $pidFile = Join-Path $appRoot 'participant_web_app.pid'; if (Test-Path $pidFile) { $rawPid = (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1); if ($rawPid -match '^\d+$') { $targetPid = [int]$rawPid; $proc = Get-CimInstance Win32_Process -Filter \"ProcessId = $targetPid\" -ErrorAction SilentlyContinue; if ($proc -and $proc.Name -in @('python.exe','py.exe')) { try { Stop-Process -Id $targetPid -Force -ErrorAction Stop } catch {} } }; Remove-Item $pidFile -Force -ErrorAction SilentlyContinue }; Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('python.exe','py.exe') -and $_.CommandLine -match 'participant_web_app\.py' } | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {} }" >nul 2>&1
+
+pushd "%APP_ROOT%"
 
 if exist venv\Scripts\python.exe (
   venv\Scripts\python.exe participant_web_app.py
@@ -1040,10 +1072,20 @@ if exist venv\Scripts\python.exe (
 ) else (
   python participant_web_app.py
 )
+popd
 """
+    launcher_bat = launcher_bat.replace("__APP_DIR__", PARTICIPANT_SUPPORT_DIR_NAME)
     launcher_sh = """#!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")"
+APP_ROOT="$(dirname "$0")/__APP_DIR__"
+export PYTHONDONTWRITEBYTECODE=1
+
+if [ ! -f "$APP_ROOT/participant_web_app.py" ]; then
+  echo "Support files are missing from this kit."
+  exit 1
+fi
+
+cd "$APP_ROOT"
 
 if [ -x "venv/bin/python" ]; then
   "venv/bin/python" participant_web_app.py
@@ -1053,6 +1095,7 @@ else
   python participant_web_app.py
 fi
 """
+    launcher_sh = launcher_sh.replace("__APP_DIR__", PARTICIPANT_SUPPORT_DIR_NAME)
     if participant_os == "windows":
         (kit_dir / "Launch_Study_Web_App.bat").write_text(launcher_bat, encoding="utf-8")
         return
@@ -1081,8 +1124,9 @@ def build_participant_kit(args: argparse.Namespace) -> None:
 
     out_root = Path(args.out_root)
     kit_dir = out_root / args.participant_id
+    support_dir = kit_dir / PARTICIPANT_SUPPORT_DIR_NAME
     run_dir_name = f"run_{args.phase}_{args.participant_id}"
-    run_dir = kit_dir / run_dir_name
+    run_dir = support_dir / run_dir_name
 
     if kit_dir.exists():
         if not args.overwrite:
@@ -1196,9 +1240,9 @@ def build_participant_kit(args: argparse.Namespace) -> None:
             "analysis_in_kit": False,
         },
     }
-    (kit_dir / "study_config.lock.json").write_text(json.dumps(locked_config, indent=2), encoding="utf-8")
+    (support_dir / "study_config.lock.json").write_text(json.dumps(locked_config, indent=2), encoding="utf-8")
     _write_kit_manifest(
-        kit_dir=kit_dir,
+        kit_dir=support_dir,
         source_csv=source_csv,
         lock_payload=locked_config,
         snippet_files=snippet_files,
@@ -1226,7 +1270,7 @@ def build_participant_kit(args: argparse.Namespace) -> None:
         participant_os=participant_os,
     )
     _write_submission_packager(
-        path=kit_dir / "package_submission.py",
+        path=support_dir / "package_submission.py",
         run_dir_name=run_dir_name,
         participant_id=args.participant_id,
         condition=args.condition,
@@ -1235,12 +1279,13 @@ def build_participant_kit(args: argparse.Namespace) -> None:
     template_app = Path(__file__).resolve().with_name("participant_web_app_template.py")
     if not template_app.exists():
         raise FileNotFoundError(f"Missing participant app template: {template_app}")
-    shutil.copy2(template_app, kit_dir / "participant_web_app.py")
+    shutil.copy2(template_app, support_dir / "participant_web_app.py")
     _write_participant_launcher(kit_dir=kit_dir, participant_os=participant_os)
+    _hide_participant_support_dir(support_dir, participant_os)
 
     print("Participant kit created.")
     print(f"Kit: {kit_dir}")
-    print(f"Run folder: {run_dir}")
+    print(f"Support folder: {support_dir}")
     print(f"Snippets: {len(snippet_ids)}")
 
 

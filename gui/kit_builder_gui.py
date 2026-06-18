@@ -15,7 +15,8 @@ from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPERTISE_AREAS_PATH = REPO_ROOT / "tools" / "domain_classification" / "expertise_areas.jsonl"
-DEFAULT_KIT_SOURCE_PATH = "data/datasets/classified/dataset_classified.csv"
+DEFAULT_CLASSIFIED_SOURCE_PATH = "data/datasets/classified/dataset_classified.csv"
+DEFAULT_PARTICIPANT_READY_SOURCE_PATH = "data/datasets/classified/dataset_participant_ready.csv"
 LOCAL_LLM_BASE_URL = "http://127.0.0.1:11434"
 KIT_BUILDER_CACHE_PATH = REPO_ROOT / "gui" / ".cache" / "kit_builder_state.json"
 if str(REPO_ROOT) not in sys.path:
@@ -23,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts.participant_kit import (  # noqa: E402
     PARTICIPANT_OS_LABELS,
+    PARTICIPANT_SUPPORT_DIR_NAME,
     build_participant_kit,
 )
 
@@ -31,6 +33,14 @@ PARTICIPANT_OS_VALUES = list(PARTICIPANT_OS_LABELS)
 PARTICIPANT_OS_DISPLAY_NAMES = [PARTICIPANT_OS_LABELS[key] for key in PARTICIPANT_OS_VALUES]
 PARTICIPANT_OS_LABEL_TO_VALUE = {PARTICIPANT_OS_LABELS[key]: key for key in PARTICIPANT_OS_VALUES}
 PARTICIPANT_OS_VALUE_TO_LABEL = {key: PARTICIPANT_OS_LABELS[key] for key in PARTICIPANT_OS_VALUES}
+
+
+def _default_kit_source_path() -> str:
+    """Prefer the participant-ready dataset when it has been built locally."""
+    participant_ready = REPO_ROOT / DEFAULT_PARTICIPANT_READY_SOURCE_PATH
+    if participant_ready.exists():
+        return DEFAULT_PARTICIPANT_READY_SOURCE_PATH
+    return DEFAULT_CLASSIFIED_SOURCE_PATH
 
 
 def _load_expertise_labels(path: Path) -> list[str]:
@@ -100,7 +110,7 @@ class KitBuilderGUI(tk.Tk):
         initial_state = self._read_session_state()
 
         self.out_root_var = tk.StringVar(value="participant_kits")
-        self.metadata_var = tk.StringVar(value=DEFAULT_KIT_SOURCE_PATH)
+        self.metadata_var = tk.StringVar(value=_default_kit_source_path())
         self.samples_per_hardness_var = tk.IntVar(value=3)
         self.selection_seed_var = tk.IntVar(value=42)
         self.condition_var = tk.StringVar(value="security")
@@ -148,8 +158,10 @@ class KitBuilderGUI(tk.Tk):
 
     def _last_non_local_kit_endpoint(self) -> str:
         """Reuse the most recent remote endpoint already stamped into a kit lock file."""
+        roots = REPO_ROOT / "participant_kits"
         lock_paths = sorted(
-            (REPO_ROOT / "participant_kits").glob("*/study_config.lock.json"),
+            list(roots.glob(f"*/{PARTICIPANT_SUPPORT_DIR_NAME}/study_config.lock.json"))
+            + list(roots.glob("*/study_config.lock.json")),
             key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
@@ -542,7 +554,7 @@ class KitBuilderGUI(tk.Tk):
                 raise FileExistsError("The following participant kit IDs already exist.\n\n" f"{listed}\n\n" "Change naming settings or enable overwrite.")
             created: list[str] = []
             for pid in participant_ids:
-                args = argparse.Namespace(participant_id=pid, condition=self.condition_var.get().strip(), phase=self.phase_var.get().strip(), metadata_csv=str(metadata_csv), expertise_areas=", ".join(self._selected_expertise_areas()), samples_per_hardness=int(self.samples_per_hardness_var.get()), selection_seed=int(self.selection_seed_var.get()), out_root=str(out_root), study_id=self.study_id_var.get().strip(), participant_os=PARTICIPANT_OS_LABEL_TO_VALUE.get(self.participant_os_var.get().strip(), self.participant_os_var.get().strip()), llm_provider=self.provider_var.get().strip(), llm_model=self.model_var.get().strip(), llm_base_url=self.base_url_var.get().strip(), temperature=0.2, top_p=0.9, top_k=40, num_predict=1024, seed=42, overwrite=bool(self.overwrite_var.get()))
+                args = argparse.Namespace(participant_id=pid, condition=self.condition_var.get().strip(), phase=self.phase_var.get().strip(), metadata_csv=str(metadata_csv), expertise_areas=", ".join(self._selected_expertise_areas()), samples_per_hardness=int(self.samples_per_hardness_var.get()), selection_seed=int(self.selection_seed_var.get()), out_root=str(out_root), study_id=self.study_id_var.get().strip(), participant_os=PARTICIPANT_OS_LABEL_TO_VALUE.get(self.participant_os_var.get().strip(), self.participant_os_var.get().strip()), llm_provider=self.provider_var.get().strip(), llm_model=self.model_var.get().strip(), llm_base_url=self.base_url_var.get().strip(), temperature=0.2, top_p=0.9, top_k=40, num_predict=1536, seed=42, overwrite=bool(self.overwrite_var.get()))
                 build_participant_kit(args)
                 created.append(pid)
             self._write_session_state()

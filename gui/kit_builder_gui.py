@@ -19,6 +19,7 @@ DEFAULT_CLASSIFIED_SOURCE_PATH = "data/datasets/classified/dataset_classified.cs
 DEFAULT_PARTICIPANT_READY_SOURCE_PATH = "data/datasets/classified/dataset_participant_ready.csv"
 LOCAL_LLM_BASE_URL = "http://127.0.0.1:11434"
 KIT_BUILDER_CACHE_PATH = REPO_ROOT / "gui" / ".cache" / "kit_builder_state.json"
+SUPPORTED_LLM_PROVIDERS = ["ollama"]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -78,6 +79,14 @@ def _llm_endpoint_is_local(base_url: str) -> bool:
     parsed = urlparse(_clean_text(base_url))
     host = (parsed.hostname or "").strip().lower()
     return host in {"", "127.0.0.1", "localhost", "0.0.0.0", "::1"}
+
+
+def _normalize_provider(value: object) -> str:
+    """Collapse cached or typed provider values to one supported provider label."""
+    text = _clean_text(value).lower()
+    if text in SUPPORTED_LLM_PROVIDERS:
+        return text
+    return "ollama"
 
 
 class KitBuilderGUI(tk.Tk):
@@ -193,7 +202,7 @@ class KitBuilderGUI(tk.Tk):
                 self.participant_os_var.get().strip(),
                 self.participant_os_var.get().strip(),
             ),
-            "provider": self.provider_var.get().strip(),
+            "provider": _normalize_provider(self.provider_var.get()),
             "model": self.model_var.get().strip(),
             "base_url": self.base_url_var.get().strip(),
             "base_name": self.base_name_var.get().strip(),
@@ -247,7 +256,7 @@ class KitBuilderGUI(tk.Tk):
                 self.participant_os_var.set(PARTICIPANT_OS_VALUE_TO_LABEL[participant_os])
             elif participant_os in PARTICIPANT_OS_LABEL_TO_VALUE:
                 self.participant_os_var.set(participant_os)
-            self.provider_var.set(str(form.get("provider", self.provider_var.get())))
+            self.provider_var.set(_normalize_provider(form.get("provider", self.provider_var.get())))
             self.model_var.set(str(form.get("model", self.model_var.get())))
 
             cached_base_url = _clean_text(form.get("base_url"))
@@ -385,7 +394,7 @@ class KitBuilderGUI(tk.Tk):
         self._row_combo(form, 3, "Participant OS", self.participant_os_var, PARTICIPANT_OS_DISPLAY_NAMES, column_offset=2)
         self._row_spin_inline(form, 4, "Samples / Hardness", self.samples_per_hardness_var, 1, 10, column_offset=0)
         self._row_spin_inline(form, 4, "Selection Seed", self.selection_seed_var, 0, 999999, column_offset=2)
-        self._row_entry(form, 5, "LLM Provider", self.provider_var, column_offset=0)
+        self._row_combo(form, 5, "LLM Provider", self.provider_var, SUPPORTED_LLM_PROVIDERS, column_offset=0)
         self._row_entry(form, 5, "LLM Model", self.model_var, column_offset=2)
         self._row_entry(form, 6, "LLM Endpoint URL", self.base_url_var, column_offset=0, columnspan=3)
         ttk.Label(
@@ -554,7 +563,7 @@ class KitBuilderGUI(tk.Tk):
                 raise FileExistsError("The following participant kit IDs already exist.\n\n" f"{listed}\n\n" "Change naming settings or enable overwrite.")
             created: list[str] = []
             for pid in participant_ids:
-                args = argparse.Namespace(participant_id=pid, condition=self.condition_var.get().strip(), phase=self.phase_var.get().strip(), metadata_csv=str(metadata_csv), expertise_areas=", ".join(self._selected_expertise_areas()), samples_per_hardness=int(self.samples_per_hardness_var.get()), selection_seed=int(self.selection_seed_var.get()), out_root=str(out_root), study_id=self.study_id_var.get().strip(), participant_os=PARTICIPANT_OS_LABEL_TO_VALUE.get(self.participant_os_var.get().strip(), self.participant_os_var.get().strip()), llm_provider=self.provider_var.get().strip(), llm_model=self.model_var.get().strip(), llm_base_url=self.base_url_var.get().strip(), temperature=0.2, top_p=0.9, top_k=40, num_predict=1536, seed=42, overwrite=bool(self.overwrite_var.get()))
+                args = argparse.Namespace(participant_id=pid, condition=self.condition_var.get().strip(), phase=self.phase_var.get().strip(), metadata_csv=str(metadata_csv), expertise_areas=", ".join(self._selected_expertise_areas()), samples_per_hardness=int(self.samples_per_hardness_var.get()), selection_seed=int(self.selection_seed_var.get()), out_root=str(out_root), study_id=self.study_id_var.get().strip(), participant_os=PARTICIPANT_OS_LABEL_TO_VALUE.get(self.participant_os_var.get().strip(), self.participant_os_var.get().strip()), llm_provider=_normalize_provider(self.provider_var.get()), llm_model=self.model_var.get().strip(), llm_base_url=self.base_url_var.get().strip(), temperature=0.2, top_p=0.9, top_k=40, num_predict=1536, seed=42, overwrite=bool(self.overwrite_var.get()))
                 build_participant_kit(args)
                 created.append(pid)
             self._write_session_state()

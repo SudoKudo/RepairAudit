@@ -111,6 +111,18 @@ PARTICIPANT_PROFILE_OPTIONS = {
 PARTICIPANT_PROFILE_FIELDS = list(PARTICIPANT_PROFILE_OPTIONS.keys())
 
 
+def participant_chat_system_prompt() -> str:
+    """Return the neutral system prompt used for participant-side LLM chat."""
+    return (
+        "You are the assigned coding assistant for this study. "
+        "Follow the participant's request exactly. "
+        "Do not assume a task, intent, or output format beyond what the participant asked for. "
+        "Keep responses straightforward and easy to use in the study app. "
+        "Do not use markdown fences unless the participant asks for them. "
+        "If you return code, preserve the original programming language and formatting style."
+    )
+
+
 class StudyStore:
     """Data layer for the participant web app.
 
@@ -433,7 +445,7 @@ class StudyStore:
             raise KeyError(f"snippet_id not found in snippet_log.csv: {snippet_id}")
 
         if validate_summary:
-            self._validate_summary(summary)
+            self._validate_summary(normalized)
         self.write_rows(rows)
 
         # Track latest autosave/save so participants can see draft persistence feedback.
@@ -442,7 +454,7 @@ class StudyStore:
         self._write_json(self.timer_path, timer_payload)
 
     def _validate_summary(self, summary: dict[str, str]) -> None:
-        """Validate participant-entered summary fields before export or strict save."""
+        """Validate one normalized snippet-summary row before strict save or export."""
         try:
             turns = int((summary.get("turns") or "0").strip() or "0")
             applied = int((summary.get("applied_turns") or "").strip())
@@ -894,8 +906,8 @@ def html_page(csrf_token: str) -> str:
 <style>
 :root{--bg:#f4f8ff;--panel:#ffffff;--text:#0f2039;--muted:#5c6f8b;--line:#d5e3ff;--accent:#2d79ff;--accent-dark:#1f5fd1;--ok:#0a8f4e;--bad:#c53b32}
 *{box-sizing:border-box}
-body{margin:0;background:linear-gradient(180deg,#f9fbff 0%,#eff5ff 100%);font-family:Segoe UI,Arial,sans-serif;color:var(--text)}
-.wrap{max-width:1600px;margin:0 auto;padding:16px}
+body{margin:0;min-height:100vh;background:linear-gradient(180deg,#f9fbff 0%,#eff5ff 100%);font-family:Segoe UI,Arial,sans-serif;color:var(--text)}
+.wrap{width:100%;max-width:none;margin:0;padding:16px 18px}
 .hdr{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px 16px;margin-bottom:12px;box-shadow:0 8px 20px rgba(30,74,138,.08)}
 .hdr h1{margin:0;font-size:23px}
 .sub{margin-top:5px;color:var(--muted);font-size:13px}
@@ -1013,7 +1025,7 @@ select:focus{
       <div class="chatlog" id="chatHistory" title="Chat history for the currently selected snippet."></div>
       <div class="full" style="margin-top:8px">
         <label class="lbl" title="Enter one prompt for the assigned LLM about the current snippet.">Chat Prompt</label>
-        <textarea id="chat_prompt" placeholder="Paste the relevant function or code block here and ask for a repair..." title="Press Ctrl+Enter to send quickly."></textarea>
+        <textarea id="chat_prompt" placeholder="Paste the relevant function or code block here. Larger inputs can take longer to answer." title="Press Ctrl+Enter to send quickly."></textarea>
       </div>
       <div class="row" style="margin-top:8px">
         <button class="btn" id="sendChatBtn" title="Send prompt to the assigned LLM and auto-log both user and assistant turns.">Send To LLM</button></div>
@@ -1604,6 +1616,7 @@ function buildInAppGuide(data){
     "- Session timer (resume-aware)",
     "",
     "If The Assistant Stalls",
+    "- Larger pasted code blocks can take noticeably longer to answer.",
     "- Retry once with a narrower repair request.",
     "- If it still fails, keep your current code changes and continue.",
     "",
@@ -1717,6 +1730,7 @@ function buildOnboardingHtml(data){
     "</ul>",
     "<h3>If The Assistant Refuses Or Fails</h3>",
     "<ul>",
+    "<li>Larger pasted code blocks can take noticeably longer to answer.</li>",
     "<li>Retry once with a narrower repair request.</li>",
     "<li>If it still fails, keep your current code changes and move on.</li>",
     "</ul>",
@@ -1999,7 +2013,7 @@ function saveDraftCurrent(onOk, onErr){
     return;
   }
   var code = byId("edited_code") ? byId("edited_code").value : "";
-  var payload = {snippet_id: currentSid, code: code, summary: collectSummary()};
+  var payload = {snippet_id: currentSid, code: code, summary: collectSummary(), strict_summary: false};
   api("/api/save_snippet", "POST", payload, function(resp){
     onOk && onOk(resp || {});
   }, function(msg){
@@ -2024,7 +2038,7 @@ function saveCurrent(nextFn){
   }
 
   var code = byId("edited_code") ? byId("edited_code").value : "";
-  var payload = {snippet_id: currentSid, code: code, summary: collectSummary()};
+  var payload = {snippet_id: currentSid, code: code, summary: collectSummary(), strict_summary: true};
   api("/api/save_snippet", "POST", payload, function(){
     setMsg("Saved " + snippetLabel(currentSid) + ".", true);
     refreshState(function(){
@@ -2544,14 +2558,8 @@ class AppHandler(BaseHTTPRequestHandler):
         return opts
 
     def _participant_chat_system_prompt(self) -> str:
-        """Keep participant-side repair replies compact and easy to paste back into the kit."""
-        return (
-            "You are assisting with a code repair task. "
-            "When the user pastes code and asks for a fix, return the repaired code first. "
-            "Unless the user explicitly asks for explanation, do not include prose before the code. "
-            "Do not use markdown fences. Preserve the original programming language and formatting style. "
-            "Keep any explanation after the code brief."
-        )
+        """Return the participant-side system prompt used for chat requests."""
+        return participant_chat_system_prompt()
 
     def _ollama_message_text(self, resp: dict[str, object]) -> str:
         """Extract assistant text from either Ollama chat or generate style responses."""
@@ -2765,9 +2773,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 snippet_id = str(body.get("snippet_id", "")).strip()
                 code = str(body.get("code", ""))
                 summary = body.get("summary", {})
+                strict_summary = bool(body.get("strict_summary", False))
                 if not isinstance(summary, dict):
                     summary = {}
-                self.store.save_snippet_and_summary(snippet_id, code, summary, validate_summary=False)
+                self.store.save_snippet_and_summary(snippet_id, code, summary, validate_summary=strict_summary)
                 self.store.mark_snippet_saved(snippet_id)
                 self._json({"ok": True, "message": f"Saved {snippet_id}."})
                 return
@@ -3022,7 +3031,14 @@ def run_server() -> None:
         for edge_path in edge_candidates:
             if edge_path.exists():
                 try:
-                    subprocess.Popen([str(edge_path), "--new-window", "--app=" + url])
+                    subprocess.Popen(
+                        [
+                            str(edge_path),
+                            "--new-window",
+                            "--start-maximized",
+                            "--app=" + url,
+                        ]
+                    )
                     print(f"[launch] Opened Edge: {edge_path}")
                     return
                 except Exception:

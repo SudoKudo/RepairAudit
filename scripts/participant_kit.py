@@ -949,6 +949,14 @@ def _llm_endpoint_is_local(base_url: str) -> bool:
     return host in {"", "127.0.0.1", "localhost", "::1"}
 
 
+def _normalize_llm_provider(value: Any) -> str:
+    """Collapse provider input to the supported Ollama-compatible label."""
+    text = _clean_text(value).lower()
+    if text == "ollama":
+        return text
+    return "ollama"
+
+
 def _write_participant_readme(
     *,
     path: Path,
@@ -988,6 +996,7 @@ def _write_participant_readme(
             [
                 "- Use only the assistant built into this kit.",
                 f"- This kit is locked to `{model_name}`.",
+                "- Larger pasted code blocks can take longer to answer. If a reply is slow, wait before retrying or send a smaller function/block.",
                 "- Do not edit the kit files or switch to another assistant unless the research team told you to do that.",
             ]
         )
@@ -1013,6 +1022,7 @@ def _write_participant_readme(
             [
                 "- Use only the assistant built into this kit.",
                 "- You do not need to choose a model or edit the endpoint yourself.",
+                "- Larger pasted code blocks can take longer to answer. If a reply is slow, wait before retrying or send a smaller function/block.",
                 "- Do not edit the kit files or switch to another assistant unless the research team told you to do that.",
             ]
         )
@@ -1464,7 +1474,7 @@ def build_participant_kit(args: argparse.Namespace) -> None:
             "selection_seed": selection_seed,
         },
         "llm": {
-            "provider": args.llm_provider,
+            "provider": _normalize_llm_provider(getattr(args, "llm_provider", "ollama")),
             "model": args.llm_model,
             "base_url": _clean_text(getattr(args, "llm_base_url", "http://127.0.0.1:11434")) or "http://127.0.0.1:11434",
             "temperature": args.temperature,

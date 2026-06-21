@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from zipfile import ZipFile
 
 
 MODULE_PATH = (
@@ -271,6 +272,12 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                 self.assertFalse((out_root / "P777" / "Launch_Study_Web_App.sh").exists())
                 self.assertIn("Launch_Study_Web_App.bat", participant_readme)
                 self.assertNotIn("Launch_Study_Web_App.sh", participant_readme)
+                share_zip = out_root / "_share_zips" / "participant_kit_pilot_P777.zip"
+                self.assertTrue(share_zip.exists())
+                with ZipFile(share_zip, "r") as zf:
+                    names = set(zf.namelist())
+                self.assertIn("P777/Launch_Study_Web_App.bat", names)
+                self.assertIn(f"P777/{participant_kit.PARTICIPANT_SUPPORT_DIR_NAME}/participant_web_app.py", names)
 
                 self.assertEqual(assignment["expertise_areas"], ["Backend / API Development"])
                 self.assertEqual(assignment["samples_per_hardness"], 3)
@@ -366,6 +373,12 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                 self.assertTrue((out_root / "P888" / "Launch_Study_Web_App.sh").exists())
                 self.assertIn("Launch_Study_Web_App.sh", participant_readme)
                 self.assertNotIn("Launch_Study_Web_App.bat", participant_readme)
+                share_zip = out_root / "_share_zips" / "participant_kit_pilot_P888.zip"
+                self.assertTrue(share_zip.exists())
+                with ZipFile(share_zip, "r") as zf:
+                    names = set(zf.namelist())
+                self.assertIn("P888/Launch_Study_Web_App.sh", names)
+                self.assertIn(f"P888/{participant_kit.PARTICIPANT_SUPPORT_DIR_NAME}/study_config.lock.json", names)
             finally:
                 researcher_map.unlink(missing_ok=True)
 
@@ -390,6 +403,29 @@ class ParticipantKitSelectionTests(unittest.TestCase):
 
             self.assertFalse(participant_dir.exists())
             self.assertTrue(reserved_dir.exists())
+
+    def test_clean_participant_kits_removes_matching_share_zip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            kits_root = Path(tmp_dir) / "participant_kits"
+            participant_dir = kits_root / "P100"
+            share_dir = kits_root / "_share_zips"
+            participant_dir.mkdir(parents=True)
+            share_dir.mkdir(parents=True)
+            (participant_dir / "README.md").write_text("kit", encoding="utf-8")
+            share_zip = share_dir / "participant_kit_pilot_P100.zip"
+            share_zip.write_text("zip", encoding="utf-8")
+
+            args = argparse.Namespace(
+                out_root=str(kits_root),
+                participant_id="P100",
+                all=False,
+                dry_run=False,
+            )
+
+            participant_kit.clean_participant_kits(args)
+
+            self.assertFalse(participant_dir.exists())
+            self.assertFalse(share_zip.exists())
 
     @unittest.skipUnless(os.name == "nt", "Windows lock cleanup test is Windows-only.")
     def test_remove_tree_with_lock_cleanup_retries_after_stale_python_stop(self) -> None:

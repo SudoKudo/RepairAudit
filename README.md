@@ -341,6 +341,7 @@ Default behavior:
 - GUI and CLI participant-kit defaults use `qwen3.6:27b`; change the kit model if your assigned endpoint serves a different model.
 - Kit generation writes only the participant launcher that matches the selected target OS.
 - Kit generation keeps the participant-facing folder minimal: the launcher and README stay at the top level, while app support files live in a hidden support folder.
+- Kit generation also writes a share-ready researcher archive under `participant_kits/_share_zips/` so cloud drives do not need to zip the raw folder for you.
 - The kit builder prefers the participant-ready dataset when it exists, and dataset-backed sampling skips low-confidence rows even if you point at the broader classified CSV.
 - If no expertise areas are selected, dataset-backed kit generation samples from the full selected dataset source.
 - If `--metadata_csv` points at `data/metadata/snippet_metadata.csv`, the expertise/hardness selection settings are ignored and the kit uses the file-backed snippet list.
@@ -382,13 +383,14 @@ Notes:
 
 ### 8.4 Distribute a participant kit
 1. Build the kit into `participant_kits/<participant_id>/`.
-2. Zip that folder or send the folder as-is.
-3. Tell the participant to:
+2. Prefer the generated archive in `participant_kits/_share_zips/` when uploading to OneDrive or another cloud drive that re-zips folders on download.
+3. If you are not using the generated archive, zip the folder yourself before upload or send the folder as-is.
+4. Tell the participant to:
    - make sure Python is installed on the machine that will launch the kit
    - check the kit README for any network or endpoint requirement before starting
    - use only the launcher and browser app; do not edit the hidden support files or change the locked endpoint/model
    - complete every assigned snippet and use `Finish (Build ZIP)` at the end
-4. The participant returns the ZIP created in the kit's `exports/` folder.
+5. The participant returns the ZIP created in the kit's `exports/` folder.
 
 ### 8.5 Receive a completed participant return
 1. Copy the returned ZIP into a temporary staging location.

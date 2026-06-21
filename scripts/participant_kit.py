@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from tools.domain_classification.participant_ready import is_participant_ready_row
 
@@ -957,6 +958,27 @@ def _normalize_llm_provider(value: Any) -> str:
     return "ollama"
 
 
+def _share_zip_path(out_root: Path, *, phase: str, participant_id: str) -> Path:
+    """Return the researcher-side share zip path for one generated participant kit."""
+    return out_root / "_share_zips" / f"participant_kit_{phase}_{participant_id}.zip"
+
+
+def _write_share_zip(*, out_root: Path, kit_dir: Path, phase: str, participant_id: str) -> Path:
+    """Write a share-ready archive so cloud drives do not need to zip the kit folder."""
+    zip_path = _share_zip_path(out_root, phase=phase, participant_id=participant_id)
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    if zip_path.exists():
+        zip_path.unlink()
+
+    with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as zf:
+        for path in sorted(kit_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            arcname = str(path.relative_to(out_root)).replace("\\", "/")
+            zf.write(path, arcname=arcname)
+    return zip_path
+
+
 def _write_participant_readme(
     *,
     path: Path,
@@ -1531,9 +1553,16 @@ def build_participant_kit(args: argparse.Namespace) -> None:
     shutil.copy2(template_app, support_dir / "participant_web_app.py")
     _write_participant_launcher(kit_dir=kit_dir, participant_os=participant_os)
     _hide_participant_support_dir(support_dir, participant_os)
+    share_zip = _write_share_zip(
+        out_root=out_root,
+        kit_dir=kit_dir,
+        phase=args.phase,
+        participant_id=args.participant_id,
+    )
 
     print("Participant kit created.")
     print(f"Kit: {kit_dir}")
+    print(f"Share ZIP: {share_zip}")
     print(f"Support folder: {support_dir}")
     print(f"Snippets: {len(snippet_ids)}")
 
@@ -1591,6 +1620,17 @@ def clean_participant_kits(args: argparse.Namespace) -> None:
             _remove_tree_with_lock_cleanup(d)
             print(f"Removed: {d}")
             removed += 1
+
+    if participant_id and not args.dry_run:
+        share_zip_parent = kits_root / "_share_zips"
+        for zip_path in share_zip_parent.glob(f"participant_kit_*_{participant_id}.zip"):
+            zip_path.unlink(missing_ok=True)
+            print(f"Removed share ZIP: {zip_path}")
+        try:
+            if share_zip_parent.exists() and not any(share_zip_parent.iterdir()):
+                share_zip_parent.rmdir()
+        except Exception:
+            pass
 
     if args.dry_run:
         print(f"Preview complete. {len(target_dirs)} kit(s) would be removed.")

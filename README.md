@@ -378,7 +378,11 @@ Notes:
 ### 8.3 Participant web app notes
 - Web app is driven by the snippet list in the kit, not by a fixed snippet count.
 - Snippet content is loaded per snippet request, not all code at once.
-- Participants review the baseline pane as read-only reference, use the assigned in-app LLM chat, and paste the final repaired answer into the submission box that will be graded/exported.
+- Participants review the baseline pane as read-only reference, use the assigned in-app LLM chat, and paste the final code they want submitted into the export box.
+- The app does not assume every snippet is vulnerable; participants can use the chat to inspect, question, or revise the code as they normally would.
+- A snippet cannot be marked complete unless it has final submitted code, at least one in-app LLM turn, and the required summary fields.
+- The visible session timer starts when the participant clicks `Begin Study`, while onboarding read time is logged separately.
+- `Stop / Discard Reply` now aborts the upstream Ollama chat request instead of only hiding the finished result later.
 - Participants do all task work inside the browser app: use the assigned in-app LLM chat, save snippet summaries, and build the return ZIP.
 
 ### 8.4 Distribute a participant kit
@@ -529,6 +533,7 @@ Aggregated:
 Modeling note:
 - `pilot_model_data.csv` uses de-identified participant labels (`participant_001`, `participant_002`, ...) rather than raw run folder names.
 - `compute-models` currently fits a local fixed-effects logistic model with participant, snippet, language, and vulnerability-type controls.
+- `compute-models` also writes a language-assignment balance check so you can inspect whether self-reported language experience is uneven across assigned languages.
 - The condition term has been removed from the default model because the current study flow is security-only.
 
 Aggregate metrics currently emitted:

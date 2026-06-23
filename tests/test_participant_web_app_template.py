@@ -22,6 +22,15 @@ SPEC.loader.exec_module(participant_web_app)
 
 
 class ParticipantWebAppTemplateTests(unittest.TestCase):
+    def _make_handler(self) -> object:
+        handler = object.__new__(participant_web_app.AppHandler)
+        handler.store = type(
+            "StoreStub",
+            (),
+            {"lock_data": {"llm": {"base_url": "http://127.0.0.1:11434", "model": "qwen3.6:27b"}}},
+        )()
+        return handler
+
     def test_move_runtime_cwd_off_kit_changes_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -75,9 +84,9 @@ class ParticipantWebAppTemplateTests(unittest.TestCase):
             (baseline_dir / "snippet_01.c").write_text("int main(void){return 0;}\n", encoding="utf-8")
             (logs_dir / "snippet_log.csv").write_text(
                 "\n".join(
-                    [
-                        "snippet_id,tool,model,turns,applied_turns,strategy_primary,confidence_1to5,first_prompt,final_prompt,notes",
-                        "S01,Ollama,qwen3.6:27b,2,0,zero_shot,3,,,",
+                        [
+                        "snippet_id,tool,model,turns,applied_turns,strategy_primary,strategy_other_text,confidence_1to5,first_prompt,final_prompt,notes",
+                        "S01,Ollama,qwen3.6:27b,2,0,zero_shot,,3,,,",
                         "",
                     ]
                 ),
@@ -88,6 +97,7 @@ class ParticipantWebAppTemplateTests(unittest.TestCase):
             summary = {
                 "applied_turns": "",
                 "strategy_primary": "zero_shot",
+                "strategy_other_text": "",
                 "confidence_1to5": "3",
                 "notes": "",
             }
@@ -98,6 +108,165 @@ class ParticipantWebAppTemplateTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 store.save_snippet_and_summary("S01", "strict", summary, validate_summary=True)
+
+    def test_strict_save_requires_other_strategy_text_and_non_empty_code(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            public_root = tmp_path / "kit"
+            kit_root = public_root / ".repairaudit"
+            run_dir = kit_root / "run_pilot_P001"
+            logs_dir = run_dir / "logs"
+            edits_dir = run_dir / "edits"
+            baseline_dir = run_dir / "baseline"
+            timings_dir = run_dir / "timings"
+
+            timings_dir.mkdir(parents=True)
+            edits_dir.mkdir(parents=True)
+            baseline_dir.mkdir(parents=True)
+            logs_dir.mkdir(parents=True)
+
+            (public_root / "README.md").write_text("kit", encoding="utf-8")
+            (kit_root / "study_config.lock.json").write_text(
+                json.dumps({"llm": {"provider": "ollama", "model": "qwen3.6:27b"}}),
+                encoding="utf-8",
+            )
+            (kit_root / "package_submission.py").write_text("print('ok')\n", encoding="utf-8")
+            (run_dir / "start_end_times.json").write_text(json.dumps({"study_started": True}), encoding="utf-8")
+            (logs_dir / "chat_log.jsonl").write_text("", encoding="utf-8")
+            (edits_dir / "snippet_01.py").write_text("", encoding="utf-8")
+            (baseline_dir / "snippet_01.py").write_text("print('baseline')\n", encoding="utf-8")
+            (logs_dir / "snippet_log.csv").write_text(
+                "\n".join(
+                    [
+                        "snippet_id,tool,model,turns,applied_turns,strategy_primary,strategy_other_text,confidence_1to5,first_prompt,final_prompt,notes",
+                        "S01,Ollama,qwen3.6:27b,2,1,other,,3,,,",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            store = participant_web_app.StudyStore(kit_root)
+            summary = {
+                "applied_turns": "1",
+                "strategy_primary": "other",
+                "strategy_other_text": "",
+                "confidence_1to5": "3",
+                "notes": "",
+            }
+
+            with self.assertRaisesRegex(ValueError, "Describe the primary strategy"):
+                store.save_snippet_and_summary("S01", "print('draft')\n", summary, validate_summary=True)
+
+            summary["strategy_other_text"] = "manual audit"
+            with self.assertRaisesRegex(ValueError, "Final Submitted Code cannot be blank"):
+                store.save_snippet_and_summary("S01", "", summary, validate_summary=True)
+
+    def test_stream_chat_assembles_full_reply(self) -> None:
+        class FakeSocket:
+            def settimeout(self, _value: float) -> None:
+                return None
+
+        class FakeRaw:
+            _sock = FakeSocket()
+
+        class FakeFP:
+            raw = FakeRaw()
+
+        class FakeResponse:
+            def __init__(self) -> None:
+                self.status = 200
+                self.fp = FakeFP()
+                self._lines = [
+                    b'{"message":{"content":"Hello"},"done":false}\n',
+                    b'{"message":{"content":" world"},"done":true,"done_reason":"stop"}\n',
+                ]
+
+            def readline(self) -> bytes:
+                if not self._lines:
+                    return b""
+                return self._lines.pop(0)
+
+            def read(self) -> bytes:
+                return b""
+
+        class FakeConnection:
+            def __init__(self, *_args: object, **_kwargs: object) -> None:
+                self.response = FakeResponse()
+
+            def request(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+            def getresponse(self) -> FakeResponse:
+                return self.response
+
+            def close(self) -> None:
+                return None
+
+        handler = self._make_handler()
+        with patch.object(participant_web_app, "HTTPConnection", FakeConnection):
+            resp = handler._ollama_stream_chat(  # type: ignore[attr-defined]
+                "/api/chat",
+                {"model": "qwen3.6:27b", "messages": [], "stream": True},
+                request_id="req-1",
+            )
+
+        self.assertEqual(resp["message"]["content"], "Hello world")
+        self.assertEqual(resp["done_reason"], "stop")
+
+    def test_stream_chat_raises_when_cancelled(self) -> None:
+        class FakeSocket:
+            def settimeout(self, _value: float) -> None:
+                return None
+
+        class FakeRaw:
+            _sock = FakeSocket()
+
+        class FakeFP:
+            raw = FakeRaw()
+
+        class FakeResponse:
+            def __init__(self) -> None:
+                self.status = 200
+                self.fp = FakeFP()
+                self._lines = [
+                    b'{"message":{"content":"Partial"},"done":false}\n',
+                ]
+
+            def readline(self) -> bytes:
+                if not self._lines:
+                    return b""
+                return self._lines.pop(0)
+
+            def read(self) -> bytes:
+                return b""
+
+        class FakeConnection:
+            def __init__(self, *_args: object, **_kwargs: object) -> None:
+                self.response = FakeResponse()
+
+            def request(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+            def getresponse(self) -> FakeResponse:
+                return self.response
+
+            def close(self) -> None:
+                return None
+
+        handler = self._make_handler()
+        with patch.object(participant_web_app, "HTTPConnection", FakeConnection):
+            with patch.object(
+                participant_web_app.AppHandler,
+                "consume_chat_request_cancelled",
+                side_effect=[False, True],
+            ):
+                with self.assertRaises(participant_web_app.OllamaChatCancelled):
+                    handler._ollama_stream_chat(  # type: ignore[attr-defined]
+                        "/api/chat",
+                        {"model": "qwen3.6:27b", "messages": [], "stream": True},
+                        request_id="req-2",
+                    )
 
 
 if __name__ == "__main__":

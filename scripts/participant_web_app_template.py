@@ -11,6 +11,7 @@ import csv
 import json
 import os
 import secrets
+import socket
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,7 @@ import time
 import webbrowser
 from datetime import datetime, timezone
 from http import HTTPStatus
+from http.client import HTTPConnection, HTTPSConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -123,6 +125,10 @@ def participant_chat_system_prompt() -> str:
     )
 
 
+class OllamaChatCancelled(RuntimeError):
+    """Raised when a participant stops an in-flight Ollama chat request."""
+
+
 class StudyStore:
     """Data layer for the participant web app.
 
@@ -157,6 +163,7 @@ class StudyStore:
             "turns",
             "applied_turns",
             "strategy_primary",
+            "strategy_other_text",
             "confidence_1to5",
             "first_prompt",
             "final_prompt",
@@ -287,6 +294,16 @@ class StudyStore:
         payload = self._read_json(self.timer_path)
         return bool(payload.get("study_started", False))
 
+    def mark_onboarding_presented(self) -> None:
+        """Record when the onboarding instructions were first shown before the timer starts."""
+        payload = self._read_json(self.timer_path)
+        if bool(payload.get("study_started", False)):
+            return
+        if str(payload.get("onboarding_opened_utc", "") or "").strip():
+            return
+        payload["onboarding_opened_utc"] = utc_now()
+        self._write_json(self.timer_path, payload)
+
     def begin_study(self) -> dict[str, object]:
         """Start the timed study session after onboarding/profile review."""
         issues = self._participant_profile_issues()
@@ -302,6 +319,10 @@ class StudyStore:
         payload["end"] = ""
         payload["recovered_previous_session"] = False
         payload["recovered_at"] = ""
+        onboarding_opened = str(payload.get("onboarding_opened_utc", "") or "").strip()
+        if onboarding_opened:
+            payload["instructions_seconds_before_start"] = round(_seconds_between(onboarding_opened, now), 3)
+        payload["begin_study_clicked_utc"] = now
         payload["session_open_start"] = now
         payload["last_heartbeat"] = now
         payload["active_seconds"] = round(_to_float(payload.get("active_seconds", 0.0), 0.0), 3)
@@ -445,6 +466,8 @@ class StudyStore:
             raise KeyError(f"snippet_id not found in snippet_log.csv: {snippet_id}")
 
         if validate_summary:
+            if not code.strip():
+                raise ValueError("Final Submitted Code cannot be blank.")
             self._validate_summary(normalized)
         self.write_rows(rows)
 
@@ -475,6 +498,8 @@ class StudyStore:
         strategy_primary = (summary.get("strategy_primary") or "").strip()
         if strategy_primary not in PROMPT_STRATEGY_VALUES:
             raise ValueError("strategy_primary must be a valid prompt strategy.")
+        if strategy_primary == "other" and not (summary.get("strategy_other_text") or "").strip():
+            raise ValueError("Describe the primary strategy when Other is selected.")
 
 
     def _summary_issues(self, row: dict[str, str]) -> list[str]:
@@ -489,6 +514,8 @@ class StudyStore:
         strategy_primary = (row.get("strategy_primary") or "").strip()
         if strategy_primary and strategy_primary not in PROMPT_STRATEGY_VALUES:
             issues.append("strategy_primary must be a valid prompt strategy")
+        if strategy_primary == "other" and not (row.get("strategy_other_text") or "").strip():
+            issues.append("strategy_other_text is required when Primary Strategy is Other")
 
 
         try:
@@ -545,6 +572,12 @@ class StudyStore:
                 continue
             normalized_row = self._auto_fill_row_from_chat(sid, dict(row))
             summary_issues = self._summary_issues(normalized_row)
+            try:
+                code_complete = bool(self.load_snippet(sid).strip())
+            except Exception:
+                code_complete = False
+            if not code_complete:
+                summary_issues.append("final submitted code is blank")
             summary_complete = len(summary_issues) == 0
             turns = turn_counts.get(sid, 0)
             # Completion is gated by summary checks, including the
@@ -604,6 +637,8 @@ class StudyStore:
             "end": payload.get("end", ""),
             "study_started": bool(payload.get("study_started", False)),
             "study_started_utc": payload.get("study_started_utc", ""),
+            "onboarding_opened_utc": payload.get("onboarding_opened_utc", ""),
+            "instructions_seconds_before_start": payload.get("instructions_seconds_before_start", 0.0),
             "active_seconds": active_closed,
             "active_display_seconds": round(active_closed + active_open, 3),
             "session_open_start": payload.get("session_open_start", ""),
@@ -939,6 +974,7 @@ textarea,input{width:100%;border:1px solid #ccddff;border-radius:10px;padding:8p
 textarea{font-family:Consolas,monospace;font-size:13px;min-height:220px;line-height:1.5;tab-size:4}
 #baseline_code{background:#f8fbff;min-height:170px}
 #chat_prompt{min-height:105px}
+.hint{font-size:12px;color:#496584}
 /* Match dropdown styling with the rest of the UI. */
 select{
   width:100%;
@@ -1010,8 +1046,8 @@ select:focus{
       </div>
       <div class="lbl" id="baselineMeta" style="margin:0 0 4px 0" title="Language and file name for this baseline snippet."></div>
       <textarea id="baseline_code" readonly wrap="off" spellcheck="false" title="Baseline snippet is read-only. Use it as your reference."></textarea>
-      <div class="lbl" style="margin:10px 0 4px 0" title="Paste and refine the repaired code you want to submit for this snippet.">Final Submitted Code</div>
-      <textarea id="edited_code" wrap="off" spellcheck="false" title="Paste the repaired result here, then edit it until it matches what you want to submit."></textarea>
+      <div class="lbl" style="margin:10px 0 4px 0" title="Paste and refine the final code you want to submit for this snippet.">Final Submitted Code</div>
+      <textarea id="edited_code" wrap="off" spellcheck="false" title="Paste the final code here, then edit it until it matches what you want to submit."></textarea>
 
       <hr style="border:none;border-top:1px solid #e5edff;margin:12px 0" />
       <div class="sp">
@@ -1025,10 +1061,13 @@ select:focus{
       <div class="chatlog" id="chatHistory" title="Chat history for the currently selected snippet."></div>
       <div class="full" style="margin-top:8px">
         <label class="lbl" title="Enter one prompt for the assigned LLM about the current snippet.">Chat Prompt</label>
-        <textarea id="chat_prompt" placeholder="Paste the relevant function or code block here. Larger inputs can take longer to answer." title="Press Ctrl+Enter to send quickly."></textarea>
+        <div class="hint" style="margin-bottom:6px">Larger inputs can take longer to answer. If a reply is slow, wait before retrying or send a smaller function or block.</div>
+        <textarea id="chat_prompt" placeholder="Chat with the LLM about this snippet as you would in a real life setting. Please type here to start your chat." title="Press Ctrl+Enter to send quickly."></textarea>
       </div>
       <div class="row" style="margin-top:8px">
-        <button class="btn" id="sendChatBtn" title="Send prompt to the assigned LLM and auto-log both user and assistant turns.">Send To LLM</button></div>
+        <button class="btn" id="sendChatBtn" title="Send prompt to the assigned LLM and auto-log both user and assistant turns.">Send To LLM</button>
+        <button class="btn alt tiny" id="discardChatBtn" type="button" style="display:none" title="Stop waiting for the current reply and discard it.">Stop / Discard Reply</button>
+      </div>
       <div class="lbl" style="margin-top:6px">Prompts and replies here are auto-logged for this snippet.</div>
     </section>
 
@@ -1050,6 +1089,7 @@ select:focus{
           <div class="lbl" id="autoTurnsNote" style="margin-top:6px">Auto-logged turns for this snippet: 0</div>
         </div>
         <div><label class="lbl" title="Main prompting approach used for this snippet.">Primary Strategy</label><select id="strategy_primary" title="Choose the main prompt strategy you used for this snippet."><option value="">Select...</option><option value="zero_shot">Zero-Shot</option><option value="few_shot">Few-Shot</option><option value="chain_of_thought">Chain-of-Thought</option><option value="adaptive_chain_of_thought">Adaptive Chain-of-Thought</option><option value="other">Other</option></select></div>
+        <div class="full" id="strategyOtherWrap" style="display:none"><label class="lbl" title="Describe the strategy you used when Other is selected.">Other Strategy</label><input id="strategy_other_text" placeholder="brief strategy label or description" title="Required when Primary Strategy is Other." /></div>
         <div><label class="lbl" title="Your confidence that the final snippet is secure.">Confidence (1-5)</label><select id="confidence_1to5" title="1 = low confidence, 5 = high confidence."><option value="">Select...</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></div>
         <div class="full"><label class="lbl" title="Optional factual notes about your process for this snippet.">Notes</label><input id="notes" placeholder="optional notes" title="Optional. Avoid personal or sensitive information." /></div>
       </div>
@@ -1071,7 +1111,7 @@ select:focus{
     <div id="onboardingBody"></div>
     <hr style="border:none;border-top:1px solid #e5edff;margin:12px 0" />
     <strong id="participantProfileHeading" title="Participant-level background information used in later aggregate analysis.">Participant Profile</strong>
-    <div class="lbl" style="margin-top:6px">Complete this once before clicking Begin Study.</div>
+    <div class="lbl" id="participantProfileNote" style="margin-top:6px">Complete this once before clicking Begin Study.</div>
     <div class="form" style="margin-top:8px">
       <div><label class="lbl" title="Your overall programming experience.">Programming Experience</label><select id="programming_experience"><option value="">Select...</option><option value="<1 year">&lt;1 year</option><option value="1-2 years">1-2 years</option><option value="3-5 years">3-5 years</option><option value="6+ years">6+ years</option></select></div>
       <div><label class="lbl" title="Your experience with the programming language or languages used in this study.">Language Experience</label><select id="language_experience"><option value="">Select...</option><option value="none">None</option><option value="basic">Basic</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></div>
@@ -1095,6 +1135,8 @@ var chatExpanded = false;
 var onboardingStorageKey = "participant_console_onboarding_v4";
 var backendConnected = true;
 var timerFrozenSeconds = 0;
+var activeChatXhr = null;
+var activeChatRequestId = "";
 
 // Compatibility fallback for environments that do not provide Number.isFinite.
 if(typeof Number.isFinite !== "function"){
@@ -1183,7 +1225,7 @@ function api(path, method, body, onOk, onErr){
   xhr.setRequestHeader("Content-Type", "application/json");
   xhr.setRequestHeader("X-CSRF-Token", CSRF_TOKEN);
   xhr.onreadystatechange = function(){
-    if(xhr.readyState !== 4){ return; }
+    if(xhr.readyState !== 4 || xhr.__repairAuditAborted){ return; }
     var data = {};
     try { data = JSON.parse(xhr.responseText || "{}"); } catch(_e) { data = {}; }
     if(xhr.status >= 200 && xhr.status < 300){
@@ -1192,10 +1234,15 @@ function api(path, method, body, onOk, onErr){
       onErr && onErr(data.error || data.message || ("Request failed: " + xhr.status));
     }
   };
+  xhr.onabort = function(){
+    xhr.__repairAuditAborted = true;
+  };
   xhr.onerror = function(){
+    if(xhr.__repairAuditAborted){ return; }
     onErr && onErr("Network request failed.");
   };
   xhr.send(body ? JSON.stringify(body) : null);
+  return xhr;
 }
 
 function snippetStatusFor(sid){
@@ -1400,7 +1447,7 @@ function formatFlatCStyleCode(text){
       continue;
     }
 
-    if(ch === "\\\"" || ch === "'"){
+    if(ch === "\"" || ch === "'"){
       inString = ch;
       index += 1;
       continue;
@@ -1453,6 +1500,149 @@ function formatFlatCStyleCode(text){
   return lines.join("\\n");
 }
 
+function pythonLineOpensBlock(line){
+  var stripped = String(line || "").trim();
+  if(!stripped || stripped.charAt(stripped.length - 1) !== ":"){
+    return false;
+  }
+  var starters = [
+    "def ",
+    "class ",
+    "if ",
+    "elif ",
+    "else:",
+    "for ",
+    "while ",
+    "try:",
+    "except",
+    "finally:",
+    "with ",
+    "match ",
+    "case "
+  ];
+  for(var i = 0; i < starters.length; i++){
+    if(stripped.indexOf(starters[i]) === 0){
+      return true;
+    }
+  }
+  return false;
+}
+
+function pythonLineDedentsFirst(line){
+  var stripped = String(line || "").trim();
+  return (
+    stripped.indexOf("elif ") === 0 ||
+    stripped.indexOf("else:") === 0 ||
+    stripped.indexOf("except") === 0 ||
+    stripped.indexOf("finally:") === 0 ||
+    stripped.indexOf("case ") === 0
+  );
+}
+
+function splitFlatPythonSegments(text){
+  var segments = [];
+  var token = [];
+  var inString = "";
+  var escaping = false;
+  var bracketDepth = 0;
+  var index = 0;
+  var length = text.length;
+
+  while(index < length){
+    var ch = text.charAt(index);
+    token.push(ch);
+
+    if(inString){
+      if(escaping){
+        escaping = false;
+        index += 1;
+        continue;
+      }
+      if(ch === "\\\\"){
+        escaping = true;
+        index += 1;
+        continue;
+      }
+      if(ch === inString){
+        inString = "";
+      }
+      index += 1;
+      continue;
+    }
+
+    if(ch === "\"" || ch === "'"){
+      inString = ch;
+      index += 1;
+      continue;
+    }
+
+    if(ch === "(" || ch === "[" || ch === "{"){
+      bracketDepth += 1;
+      index += 1;
+      continue;
+    }
+    if(ch === ")" || ch === "]" || ch === "}"){
+      bracketDepth = Math.max(0, bracketDepth - 1);
+      index += 1;
+      continue;
+    }
+
+    if(ch === "#" && bracketDepth === 0){
+      segments.push(token.join("").trim());
+      break;
+    }
+
+    if(ch === ";" && bracketDepth === 0){
+      var piece = token.slice(0, token.length - 1).join("").trim();
+      if(piece){
+        segments.push(piece);
+      }
+      token = [];
+      index += 1;
+      continue;
+    }
+
+    if(ch === ":" && bracketDepth === 0){
+      var blockPiece = token.join("").trim();
+      var tail = text.slice(index + 1).trim();
+      if(blockPiece && tail && pythonLineOpensBlock(blockPiece)){
+        segments.push(blockPiece);
+        token = [];
+      }
+      index += 1;
+      continue;
+    }
+
+    index += 1;
+  }
+
+  var tail = token.join("").trim();
+  if(tail){
+    segments.push(tail);
+  }
+  return segments;
+}
+
+function formatFlatPythonCode(text){
+  var segments = splitFlatPythonSegments(text);
+  var indent = 0;
+  var lines = [];
+  for(var i = 0; i < segments.length; i++){
+    var line = segments[i].trim();
+    if(!line){
+      continue;
+    }
+    if(pythonLineDedentsFirst(line)){
+      indent = Math.max(0, indent - 1);
+    }
+    lines.push(new Array(indent + 1).join("    ") + line);
+    if(pythonLineOpensBlock(line)){
+      indent += 1;
+    }
+  }
+  return lines.join("\\n");
+}
+
 function formatBaselineForDisplay(text, sid){
   var normalized = normalizeSnippetText(text).trim();
   if(!normalized){
@@ -1479,6 +1669,15 @@ function formatBaselineForDisplay(text, sid){
         .map(function(line){ return line.trim(); })
         .filter(function(line){ return line !== ""; })
         .join(" ")
+    );
+  }
+  if(ext === ".py" && looksFlattenedCode(normalized)){
+    normalized = formatFlatPythonCode(
+      normalized
+      .split("\\n")
+      .map(function(line){ return line.trim(); })
+      .filter(function(line){ return line !== ""; })
+      .join(" ")
     );
   }
   return normalized + "\\n";
@@ -1565,26 +1764,46 @@ function wireProfileInputs(){
 
 function fillSummary(row){
   row = row || {};
-  var fields = ["applied_turns","strategy_primary","confidence_1to5","notes"];
+  var fields = ["applied_turns","strategy_primary","strategy_other_text","confidence_1to5","notes"];
   for(var i=0;i<fields.length;i++){
     var key = fields[i];
     var el = byId(key);
     if(!el){ continue; }
     el.value = row[key] || "";
   }
+  updateStrategyOtherField();
 }
 
 function collectSummary(){
   var out = {};
   out.tool = "";
   out.model = "";
-  var fields = ["applied_turns","strategy_primary","confidence_1to5","notes"];
+  var fields = ["applied_turns","strategy_primary","strategy_other_text","confidence_1to5","notes"];
   for(var i=0;i<fields.length;i++){
     var key = fields[i];
     var el = byId(key);
     out[key] = el ? (el.value || "").trim() : "";
   }
+  if(out.strategy_primary !== "other"){
+    out.strategy_other_text = "";
+  }
   return out;
+}
+
+function updateStrategyOtherField(){
+  var wrap = byId("strategyOtherWrap");
+  var input = byId("strategy_other_text");
+  var strategy = byId("strategy_primary");
+  var show = !!(strategy && strategy.value === "other");
+  if(wrap){
+    wrap.style.display = show ? "block" : "none";
+  }
+  if(input){
+    input.disabled = !show || !studyStarted();
+    if(!show){
+      input.value = "";
+    }
+  }
 }
 
 function buildInAppGuide(data){
@@ -1592,8 +1811,9 @@ function buildInAppGuide(data){
     "Quick Reference",
     "- Use the Onboarding button any time you need to reopen the instructions or participant profile.",
     "- The Baseline pane is reference-only. Only Final Submitted Code is exported.",
-    "- If a snippet is long, send only the function or block you are repairing.",
-    "- Save each snippet summary before moving to the next one. When everything is done, click Finish (Build ZIP).",
+    "- Each snippet may or may not be vulnerable. Use the chat however you normally would to inspect or discuss it.",
+    "- If a snippet is long, send only the relevant function or block instead of the whole file.",
+    "- Save each snippet summary and final code before moving to the next one. When everything is done, click Finish (Build ZIP).",
     "",
     "Assistant Rules",
     "- Use the assistant that comes with this kit.",
@@ -1604,7 +1824,7 @@ function buildInAppGuide(data){
     "Snippet Summary",
     "- Tip: hover over labels and buttons in the app if you need the field description.",
     "- Applied Turns: non-negative integer, must be <= total logged turns. Count only assistant turns that changed your final code.",
-    "- Primary Strategy: pick the main prompt style you used for this snippet.",
+    "- Primary Strategy: pick the main prompt style you used for this snippet. If you choose Other, add a short description.",
     "- Confidence: choose a value from 1 to 5.",
     "- Notes: optional short factual notes.",
     "",
@@ -1617,7 +1837,7 @@ function buildInAppGuide(data){
     "",
     "If The Assistant Stalls",
     "- Larger pasted code blocks can take noticeably longer to answer.",
-    "- Retry once with a narrower repair request.",
+    "- Retry once with a narrower question or code block.",
     "- If it still fails, keep your current code changes and continue.",
     "",
     "Privacy Reminder",
@@ -1703,14 +1923,20 @@ function focusParticipantProfile(){
 }
 
 function buildOnboardingHtml(data){
+  var started = !!(data && data.timer && data.timer.study_started);
   return [
-    "<p>Complete the study inside this app. The README is only for setup and launch.</p>",
+    started
+      ? "<p>Use this page as a quick reference while you work. The timer is already running.</p>"
+      : "<p>Complete the study inside this app. The README is only for setup and launch.</p>",
     "<h3>How To Complete Each Snippet</h3>",
     "<ul>",
     "<li>Select a snippet from the left list.</li>",
-    "<li>Review the baseline code, copy the part you want repaired into the in-app chat, then paste the repaired result into <strong>Final Submitted Code</strong>.</li>",
+    "<li>Review the baseline code and decide whether you want to inspect it, ask questions about it, or change it.</li>",
+    "<li>Use the in-app chat however you normally would. If you decide a change is needed, place your final answer in <strong>Final Submitted Code</strong>.</li>",
     "<li>The baseline pane is reference-only. Only <strong>Final Submitted Code</strong> is exported for analysis.</li>",
-    "<li>Complete the participant profile below, read this onboarding guide, and click <strong>Begin Study</strong>. The timer starts only then.</li>",
+    started
+      ? "<li>Your participant profile is saved below. Close this window when you are ready to return to the current snippet.</li>"
+      : "<li>Complete the participant profile below, read this onboarding guide, and click <strong>Begin Study</strong>. The timer starts only then.</li>",
     "<li>Use the in-app chat that comes with this kit. At least one in-app turn is required for each snippet.</li>",
     "<li>If a snippet is long, send only the relevant function or code block instead of the whole file.</li>",
     "<li>Fill in the snippet summary and save before moving on.</li>",
@@ -1723,15 +1949,16 @@ function buildOnboardingHtml(data){
     "<p><strong>Applied Turns</strong> means how many assistant turns directly changed your final code.</p>",
     "<h3>Prompt Strategies</h3>",
     "<ul>",
-    "<li><strong>Zero-Shot</strong>: ask for the fix directly, with no example first.<div class='example'>Fix the SQL injection issue in this function. Return only the corrected code.</div></li>",
-    "<li><strong>Few-Shot</strong>: give one or two short examples before asking for the fix.<div class='example'>Example unsafe: ... Example safe: ... Now fix this function.</div></li>",
-    "<li><strong>Chain-of-Thought</strong>: ask the model to explain its reasoning before it gives the final code.<div class='example'>Walk through why this code is vulnerable, then return the corrected code.</div></li>",
-    "<li><strong>Adaptive Chain-of-Thought</strong>: let the model decide whether a short answer is enough or whether step-by-step reasoning is needed.<div class='example'>If the fix is simple, answer briefly. If it is not, reason it out and then return the corrected code.</div></li>",
+    "<li><strong>Zero-Shot</strong>: ask directly, with no example first.<div class='example'>Review this function and tell me if anything looks unsafe.</div></li>",
+    "<li><strong>Few-Shot</strong>: give one or two short examples before asking your question.<div class='example'>Example risky pattern: ... Example safer pattern: ... Now review this function.</div></li>",
+    "<li><strong>Chain-of-Thought</strong>: ask the model to explain its reasoning before it gives a final answer.<div class='example'>Walk through what this code is doing and whether it looks vulnerable.</div></li>",
+    "<li><strong>Adaptive Chain-of-Thought</strong>: let the model decide whether a short answer is enough or whether step-by-step reasoning is needed.<div class='example'>If this is straightforward, answer briefly. If not, reason it out first.</div></li>",
+    "<li><strong>Other</strong>: if your prompt style does not fit the listed categories, choose Other and add a short description.</li>",
     "</ul>",
     "<h3>If The Assistant Refuses Or Fails</h3>",
     "<ul>",
     "<li>Larger pasted code blocks can take noticeably longer to answer.</li>",
-    "<li>Retry once with a narrower repair request.</li>",
+    "<li>Retry once with a narrower question or code block.</li>",
     "<li>If it still fails, keep your current code changes and move on.</li>",
     "</ul>",
     "<h3>Privacy</h3>",
@@ -1753,8 +1980,35 @@ function showOnboarding(forceOpen){
   body.innerHTML = buildOnboardingHtml(state);
   fillProfile((state && state.participant_profile) ? state.participant_profile : {});
   wireProfileInputs();
+  updateOnboardingControls();
   back.classList.add("show");
   back.setAttribute("aria-hidden", "false");
+}
+
+function updateOnboardingControls(){
+  var started = studyStarted();
+  var title = byId("onboardingTitle");
+  var beginBtn = byId("beginStudyBtn");
+  var closeBtn = byId("closeOnboardingBtn");
+  var profileNote = byId("participantProfileNote");
+  if(title){
+    title.textContent = started ? "Study Guide" : "Before You Start";
+  }
+  if(profileNote){
+    profileNote.textContent = started
+      ? "Your participant profile is already on file for this session."
+      : "Complete this once before clicking Begin Study.";
+  }
+  if(beginBtn){
+    beginBtn.disabled = started;
+    beginBtn.style.display = started ? "none" : "inline-flex";
+  }
+  if(closeBtn){
+    closeBtn.disabled = !started;
+    closeBtn.style.opacity = started ? "1" : "0.5";
+    closeBtn.textContent = started ? "Done" : "Close";
+    closeBtn.title = started ? "Close the onboarding guide." : "Close the onboarding guide.";
+  }
 }
 
 function hideOnboarding(markSeen){
@@ -1787,7 +2041,7 @@ function studyStarted(){
 
 function setStudyStartedUI(){
   var locked = !studyStarted();
-  var ids = ["prevBtn","saveBtn","nextBtn","zipBtn","copyBaselineBtn","sendChatBtn","applied_turns","strategy_primary","confidence_1to5","notes","appliedZeroBtn","appliedOneBtn","appliedAllBtn"];
+  var ids = ["prevBtn","saveBtn","nextBtn","zipBtn","copyBaselineBtn","sendChatBtn","discardChatBtn","applied_turns","strategy_primary","strategy_other_text","confidence_1to5","notes","appliedZeroBtn","appliedOneBtn","appliedAllBtn"];
   for(var i=0;i<ids.length;i++){
     var el = byId(ids[i]);
     if(el){ el.disabled = locked; }
@@ -1801,10 +2055,8 @@ function setStudyStartedUI(){
     list.style.pointerEvents = locked ? "none" : "auto";
     list.style.opacity = locked ? "0.6" : "1";
   }
-  var beginBtn = byId("beginStudyBtn");
-  if(beginBtn){ beginBtn.disabled = studyStarted(); }
-  var closeBtn = byId("closeOnboardingBtn");
-  if(closeBtn){ closeBtn.disabled = !studyStarted(); closeBtn.style.opacity = studyStarted() ? "1" : "0.5"; }
+  updateStrategyOtherField();
+  updateOnboardingControls();
 }
 
 function beginStudy(){
@@ -1862,7 +2114,7 @@ function formatChatFailure(msg){
   var raw = String(msg || "");
   var lower = raw.toLowerCase();
   if(lower.indexOf("empty response") !== -1){
-    return "The assigned LLM returned an empty response. Retry once with a narrower repair request.";
+    return "The assigned LLM returned an empty response. Retry once with a narrower request.";
   }
   if(
     lower.indexOf("context window") !== -1 ||
@@ -1895,6 +2147,11 @@ function getAutoTurnsForCurrent(){
 function validateSummaryInputs(showPopup){
   var summary = collectSummary();
   var autoTurns = getAutoTurnsForCurrent();
+  var codeEl = byId("edited_code");
+  var code = codeEl ? String(codeEl.value || "").trim() : "";
+  if(!code){
+    return {ok:false, message:"Final Submitted Code is required before you can save or move on."};
+  }
   if(autoTurns < 1){
     return {ok:false, message:"At least one in-app LLM turn is required for this snippet."};
   }
@@ -1918,6 +2175,9 @@ function validateSummaryInputs(showPopup){
   var allowed = {"zero_shot":true,"few_shot":true,"chain_of_thought":true,"adaptive_chain_of_thought":true,"other":true};
   if(!allowed[strategy]){
     return {ok:false, message:"Primary Strategy is required."};
+  }
+  if(strategy === "other" && !String(summary.strategy_other_text || "").trim()){
+    return {ok:false, message:"Describe the primary strategy when Other is selected."};
   }
 
   return {ok:true, message:""};
@@ -2117,6 +2377,34 @@ function refreshOllamaStatus(){
   });
 }
 
+function setChatRequestUI(inFlight){
+  var sendBtn = byId("sendChatBtn");
+  var discardBtn = byId("discardChatBtn");
+  if(sendBtn){
+    sendBtn.disabled = !!inFlight;
+    sendBtn.textContent = inFlight ? "Sending..." : "Send To LLM";
+  }
+  if(discardBtn){
+    discardBtn.style.display = inFlight ? "inline-flex" : "none";
+    discardBtn.disabled = !inFlight;
+  }
+}
+
+function discardActiveChat(){
+  if(!activeChatXhr || !activeChatRequestId){
+    return;
+  }
+  var requestId = activeChatRequestId;
+  api("/api/cancel_chat", "POST", {request_id: requestId}, function(){}, function(){});
+  try{
+    activeChatXhr.abort();
+  } catch(_err){}
+  activeChatXhr = null;
+  activeChatRequestId = "";
+  setChatRequestUI(false);
+  setMsg("Stopped waiting for the current reply. The app will discard it if it finishes in the background.", false);
+}
+
 function sendChat(){
   if(!studyStarted()){
     setMsg("Review the onboarding guide and click Begin Study before using chat.", false);
@@ -2136,37 +2424,58 @@ function sendChat(){
     setMsg("Chat prompt is too large for one request. Paste only the relevant function or block, then retry.", false);
     return;
   }
-  var btn = byId("sendChatBtn");
-  if(btn){ btn.disabled = true; btn.textContent = "Saving Draft..."; }
+  if(activeChatXhr){
+    setMsg("A reply is already in progress. Wait for it or stop and discard it first.", false);
+    return;
+  }
+  setChatRequestUI(true);
+  var requestId = "chat_" + Date.now() + "_" + Math.floor(Math.random() * 1000000);
+  activeChatRequestId = requestId;
 
   saveDraftCurrent(function(){
-    if(btn){ btn.textContent = "Sending..."; }
-    api("/api/ollama_chat", "POST", {
+    activeChatXhr = api("/api/ollama_chat", "POST", {
       snippet_id: currentSid,
       prompt: prompt,
       provider: "",
       model: "",
-      session_id: "session_1"
+      session_id: "session_1",
+      request_id: requestId
     }, function(resp){
+      if(activeChatRequestId !== requestId){
+        return;
+      }
+      activeChatXhr = null;
+      activeChatRequestId = "";
+      setChatRequestUI(false);
       if(promptEl){ promptEl.value = ""; }
+      if(resp && resp.discarded){
+        setMsg("The current reply was discarded.", false);
+        return;
+      }
       var assistantText = (resp && resp.assistant_text) ? String(resp.assistant_text) : "";
       if(resp && resp.truncated){
         setMsg("The LLM response was cut off before it finished. Send a smaller code block or retry after narrowing the request.", false);
       } else if(isRefusalLike(assistantText)){
-        setMsg("The LLM response was logged, but it looks like a refusal or non-answer. Retry once with a narrower repair request if needed.", false);
+        setMsg("The LLM response was logged, but it looks like a refusal or non-answer. Retry once with a narrower request if needed.", false);
       } else {
         setMsg("LLM response logged for " + snippetLabel(currentSid) + ".", true);
       }
       refreshState(function(){
         loadSnippet();
       });
-      if(btn){ btn.disabled = false; btn.textContent = "Send To LLM"; }
     }, function(msg){
-      if(btn){ btn.disabled = false; btn.textContent = "Send To LLM"; }
+      if(activeChatRequestId !== requestId){
+        return;
+      }
+      activeChatXhr = null;
+      activeChatRequestId = "";
+      setChatRequestUI(false);
       setMsg(formatChatFailure(msg), false);
     });
   }, function(msg){
-    if(btn){ btn.disabled = false; btn.textContent = "Send To LLM"; }
+    activeChatXhr = null;
+    activeChatRequestId = "";
+    setChatRequestUI(false);
     setMsg("Could not save the current draft before chat: " + msg, false);
   });
 }
@@ -2262,6 +2571,8 @@ function wire(){
   if(zip){ zip.onclick = buildZip; }
   var send = byId("sendChatBtn");
   if(send){ send.onclick = sendChat; }
+  var discard = byId("discardChatBtn");
+  if(discard){ discard.onclick = discardActiveChat; }
   var copy = byId("copyBaselineBtn");
   if(copy){ copy.onclick = copyBaseline; }
   var toggle = byId("toggleReadme");
@@ -2289,13 +2600,20 @@ function wire(){
   var appliedAll = byId("appliedAllBtn");
   if(appliedAll){ appliedAll.onclick = function(){ setAppliedTurnPreset("all"); }; }
 
-  var summaryInputs = ["applied_turns","strategy_primary","confidence_1to5"];
+  var summaryInputs = ["applied_turns","strategy_primary","strategy_other_text","confidence_1to5"];
   for(var si=0; si<summaryInputs.length; si++){
     var se = byId(summaryInputs[si]);
     if(se){
       addEvt(se, "change", function(){ validateSummaryInputs(false); });
       addEvt(se, "blur", function(){ validateSummaryInputs(false); });
     }
+  }
+  var strategyPrimary = byId("strategy_primary");
+  if(strategyPrimary){
+    addEvt(strategyPrimary, "change", function(){
+      updateStrategyOtherField();
+      validateSummaryInputs(false);
+    });
   }
   wireProfileInputs();
 
@@ -2393,6 +2711,8 @@ class AppHandler(BaseHTTPRequestHandler):
     client_seen: bool = False
     heartbeat_seen: bool = False
     close_requested_at: float | None = None
+    cancelled_chat_request_ids: set[str] = set()
+    cancelled_chat_lock = threading.Lock()
     quiet_paths = {"/api/ping", "/api/heartbeat", "/api/save_snippet"}
 
     def log_message(self, format: str, *args: object) -> None:
@@ -2452,7 +2772,10 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_header("Expires", "0")
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
-        self.wfile.write(raw)
+        try:
+            self.wfile.write(raw)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
 
     def _html(self, text: str, status: int = HTTPStatus.OK) -> None:
         """Write a no-cache HTML response back to the browser client."""
@@ -2464,7 +2787,37 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_header("Expires", "0")
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
-        self.wfile.write(raw)
+        try:
+            self.wfile.write(raw)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    @classmethod
+    def mark_chat_request_cancelled(cls, request_id: str) -> None:
+        """Remember that a chat reply should be discarded before it is logged."""
+        if not request_id:
+            return
+        with cls.cancelled_chat_lock:
+            cls.cancelled_chat_request_ids.add(request_id)
+
+    @classmethod
+    def consume_chat_request_cancelled(cls, request_id: str) -> bool:
+        """Return True once for a cancelled chat request and clear its marker."""
+        if not request_id:
+            return False
+        with cls.cancelled_chat_lock:
+            if request_id not in cls.cancelled_chat_request_ids:
+                return False
+            cls.cancelled_chat_request_ids.remove(request_id)
+            return True
+
+    @classmethod
+    def clear_chat_request_cancelled(cls, request_id: str) -> None:
+        """Drop a stale cancellation marker once a request finishes normally."""
+        if not request_id:
+            return
+        with cls.cancelled_chat_lock:
+            cls.cancelled_chat_request_ids.discard(request_id)
 
 
     def _ollama_request(self, path: str, payload: dict[str, object] | None = None, *, timeout: float = 90.0) -> dict[str, object]:
@@ -2561,6 +2914,122 @@ class AppHandler(BaseHTTPRequestHandler):
         """Return the participant-side system prompt used for chat requests."""
         return participant_chat_system_prompt()
 
+    def _ollama_stream_chat(
+        self,
+        path: str,
+        payload: dict[str, object],
+        *,
+        timeout: float = 240.0,
+        request_id: str = "",
+    ) -> dict[str, object]:
+        """Stream one Ollama chat reply internally so the upstream request can be cancelled."""
+        url = self._ollama_url(path)
+        parsed = urlparse(url)
+        scheme = (parsed.scheme or "http").lower()
+        connection_cls = HTTPSConnection if scheme == "https" else HTTPConnection
+        host = parsed.hostname or ""
+        port = parsed.port or (443 if scheme == "https" else 80)
+        request_path = parsed.path or "/"
+        if parsed.query:
+            request_path += "?" + parsed.query
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/x-ndjson, application/json",
+            "ngrok-skip-browser-warning": "true",
+        }
+        body = json.dumps(payload).encode("utf-8")
+        conn = connection_cls(host, port, timeout=timeout)
+
+        try:
+            conn.request("POST", request_path, body=body, headers=headers)
+            resp = conn.getresponse()
+            if resp.status < 200 or resp.status >= 300:
+                raw = resp.read().decode("utf-8", errors="replace")
+                detail = raw.strip()
+                try:
+                    parsed_error = json.loads(raw)
+                    if isinstance(parsed_error, dict):
+                        detail = str(parsed_error.get("error") or parsed_error.get("message") or detail).strip()
+                except Exception:
+                    pass
+                if detail:
+                    raise RuntimeError(f"LLM endpoint rejected the request ({resp.status}): {detail}")
+                raise RuntimeError(f"LLM endpoint rejected the request ({resp.status}).")
+
+            try:
+                raw_socket = getattr(getattr(resp, "fp", None), "raw", None)
+                sock = getattr(raw_socket, "_sock", None)
+                if sock is not None:
+                    sock.settimeout(0.5)
+            except Exception:
+                pass
+
+            assistant_parts: list[str] = []
+            final_obj: dict[str, object] = {}
+
+            while True:
+                if request_id and AppHandler.consume_chat_request_cancelled(request_id):
+                    raise OllamaChatCancelled("Participant cancelled the in-flight reply.")
+                try:
+                    raw_line = resp.readline()
+                except socket.timeout:
+                    continue
+                if not raw_line:
+                    break
+
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+
+                try:
+                    obj = json.loads(line)
+                except Exception as exc:
+                    raise RuntimeError("LLM endpoint returned invalid streamed JSON.") from exc
+                if not isinstance(obj, dict):
+                    raise RuntimeError("LLM endpoint returned unexpected streamed response format.")
+
+                final_obj = obj
+                chunk = self._ollama_message_text(obj)
+                if chunk:
+                    assistant_parts.append(chunk)
+                if bool(obj.get("done", False)):
+                    break
+
+            assistant_text = "".join(assistant_parts)
+            if not final_obj:
+                raise RuntimeError("LLM endpoint returned an empty streamed response.")
+
+            merged = dict(final_obj)
+            message_obj = merged.get("message", {})
+            if isinstance(message_obj, dict):
+                merged["message"] = {
+                    **message_obj,
+                    "content": assistant_text,
+                }
+            else:
+                merged["message"] = {"role": "assistant", "content": assistant_text}
+            if "response" in merged:
+                merged["response"] = assistant_text
+            return merged
+        except OllamaChatCancelled:
+            raise
+        except URLError as exc:
+            raise RuntimeError(
+                f"Could not reach the configured LLM endpoint at {self._ollama_base_url()} ({exc})."
+            ) from exc
+        except socket.timeout as exc:
+            raise RuntimeError("LLM streaming request timed out.") from exc
+        except Exception as exc:
+            if isinstance(exc, RuntimeError):
+                raise
+            raise RuntimeError(f"LLM request failed: {exc}") from exc
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
     def _ollama_message_text(self, resp: dict[str, object]) -> str:
         """Extract assistant text from either Ollama chat or generate style responses."""
         msg_obj = resp.get("message", {})
@@ -2588,6 +3057,7 @@ class AppHandler(BaseHTTPRequestHandler):
         messages: list[dict[str, str]],
         options: dict[str, object],
         partial_assistant_text: str,
+        request_id: str = "",
     ) -> dict[str, object]:
         """Ask the model for one continuation chunk when the first reply hits the length cap."""
         continuation_messages = list(messages)
@@ -2605,12 +3075,12 @@ class AppHandler(BaseHTTPRequestHandler):
         continuation_payload: dict[str, object] = {
             "model": model,
             "messages": continuation_messages,
-            "stream": False,
+            "stream": True,
             "think": False,
         }
         if options:
             continuation_payload["options"] = options
-        return self._ollama_request("/api/chat", continuation_payload, timeout=240.0)
+        return self._ollama_stream_chat("/api/chat", continuation_payload, timeout=240.0, request_id=request_id)
 
     def do_GET(self) -> None:  # noqa: N802
         """Serve HTML and read-only API endpoints for the participant browser app."""
@@ -2624,6 +3094,7 @@ class AppHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/state":
             # Mark active browser session once state is requested.
             AppHandler.client_seen = True
+            self.store.mark_onboarding_presented()
             ids = self.store.get_snippet_ids()
             readme_text = self.store.readme_path.read_text(encoding="utf-8", errors="replace")
             completion = self.store.completion_status()
@@ -2799,6 +3270,15 @@ class AppHandler(BaseHTTPRequestHandler):
                 self._json({"ok": True, "participant_profile": profile})
                 return
 
+            if parsed.path == "/api/cancel_chat":
+                request_id = str(body.get("request_id", "") or "").strip()
+                if not request_id:
+                    self._json({"error": "request_id is required"}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                AppHandler.mark_chat_request_cancelled(request_id)
+                self._json({"ok": True, "request_id": request_id})
+                return
+
             if parsed.path == "/api/add_turn":
                 if not self.store.study_started():
                     self._json({"error": "Review onboarding and click Begin Study before logging chat turns."}, status=HTTPStatus.BAD_REQUEST)
@@ -2830,6 +3310,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 provider = str(body.get("provider", "") or "ollama").strip()
                 model = str(body.get("model", "") or self._ollama_assigned_model()).strip()
                 session_id = str(body.get("session_id", "") or "").strip()
+                request_id = str(body.get("request_id", "") or "").strip()
 
                 if not snippet_id:
                     self._json({"error": "snippet_id is required"}, status=HTTPStatus.BAD_REQUEST)
@@ -2852,6 +3333,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 if not model:
                     self._json({"error": "No model configured in this participant kit."}, status=HTTPStatus.BAD_REQUEST)
                     return
+                AppHandler.clear_chat_request_cancelled(request_id)
 
                 context_budget = max(0, self.store.max_chat_request_chars - len(prompt))
                 prior = self.store.chat_messages_for_ollama(
@@ -2862,7 +3344,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 payload: dict[str, object] = {
                     "model": model,
                     "messages": msgs,
-                    "stream": False,
+                    "stream": True,
                     "think": False,
                 }
                 options = self._ollama_options_from_lock()
@@ -2870,7 +3352,10 @@ class AppHandler(BaseHTTPRequestHandler):
                     payload["options"] = options
 
                 try:
-                    resp = self._ollama_request("/api/chat", payload, timeout=240.0)
+                    resp = self._ollama_stream_chat("/api/chat", payload, timeout=240.0, request_id=request_id)
+                except OllamaChatCancelled:
+                    self._json({"ok": True, "discarded": True, "request_id": request_id})
+                    return
                 except Exception as exc:
                     self._json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
                     return
@@ -2888,13 +3373,21 @@ class AppHandler(BaseHTTPRequestHandler):
                             messages=msgs,
                             options=options,
                             partial_assistant_text=assistant_text,
+                            request_id=request_id,
                         )
                         cont_text = self._ollama_message_text(cont_resp)
                         if cont_text.strip():
                             assistant_text = self._merge_assistant_chunks(assistant_text, cont_text)
                             truncated = str(cont_resp.get("done_reason", "") or "").strip().lower() == "length"
+                    except OllamaChatCancelled:
+                        self._json({"ok": True, "discarded": True, "request_id": request_id})
+                        return
                     except Exception:
                         pass
+
+                if AppHandler.consume_chat_request_cancelled(request_id):
+                    self._json({"ok": True, "discarded": True, "request_id": request_id})
+                    return
 
                 user_entry = self.store.append_turn(
                     snippet_id=snippet_id,
@@ -2912,12 +3405,15 @@ class AppHandler(BaseHTTPRequestHandler):
                     model=model,
                     session_id=session_id,
                 )
+                AppHandler.clear_chat_request_cancelled(request_id)
 
                 self._json(
                     {
                         "ok": True,
                         "assistant_text": assistant_text,
                         "truncated": truncated,
+                        "discarded": False,
+                        "request_id": request_id,
                         "user_entry": user_entry,
                         "assistant_entry": assistant_entry,
                     }

@@ -106,6 +106,7 @@ def _participant_log_fieldnames() -> list[str]:
         "turns",
         "applied_turns",
         "strategy_primary",
+        "strategy_other_text",
         "confidence_1to5",
         "first_prompt",
         "final_prompt",
@@ -317,6 +318,125 @@ def _format_flat_c_like_code(text: str) -> str:
     return "\n".join(lines)
 
 
+def _python_line_opens_block(line: str) -> bool:
+    """Return True when a flattened Python statement starts an indented block."""
+    stripped = line.strip()
+    if not stripped.endswith(":"):
+        return False
+    starters = (
+        "def ",
+        "class ",
+        "if ",
+        "elif ",
+        "else:",
+        "for ",
+        "while ",
+        "try:",
+        "except",
+        "finally:",
+        "with ",
+        "match ",
+        "case ",
+    )
+    return any(stripped.startswith(prefix) for prefix in starters)
+
+
+def _python_line_dedents_first(line: str) -> bool:
+    """Return True when a Python line should reduce indent before rendering."""
+    stripped = line.strip()
+    return stripped.startswith(("elif ", "else:", "except", "finally:", "case "))
+
+
+def _split_flat_python_segments(text: str) -> list[str]:
+    """Split one-line Python text into readable statements without changing tokens."""
+    segments: list[str] = []
+    token: list[str] = []
+    in_string = ""
+    escaping = False
+    bracket_depth = 0
+    index = 0
+    length = len(text)
+
+    while index < length:
+        ch = text[index]
+        token.append(ch)
+
+        if in_string:
+            if escaping:
+                escaping = False
+                index += 1
+                continue
+            if ch == "\\":
+                escaping = True
+                index += 1
+                continue
+            if ch == in_string:
+                in_string = ""
+            index += 1
+            continue
+
+        if ch in {'"', "'"}:
+            in_string = ch
+            index += 1
+            continue
+
+        if ch in "([{":
+            bracket_depth += 1
+            index += 1
+            continue
+        if ch in ")]}":
+            bracket_depth = max(0, bracket_depth - 1)
+            index += 1
+            continue
+
+        if ch == "#" and bracket_depth == 0:
+            segments.append("".join(token).strip())
+            break
+
+        if ch == ";" and bracket_depth == 0:
+            piece = "".join(token[:-1]).strip()
+            if piece:
+                segments.append(piece)
+            token = []
+            index += 1
+            continue
+
+        if ch == ":" and bracket_depth == 0:
+            piece = "".join(token).strip()
+            tail = text[index + 1 :].strip()
+            if piece and tail and _python_line_opens_block(piece):
+                segments.append(piece)
+                token = []
+            index += 1
+            continue
+
+        index += 1
+
+    tail = "".join(token).strip()
+    if tail:
+        segments.append(tail)
+    return segments
+
+
+def _format_flat_python_code(text: str) -> str:
+    """Make flattened Python samples readable enough for participant review."""
+    segments = _split_flat_python_segments(text)
+    indent = 0
+    lines: list[str] = []
+
+    for raw_segment in segments:
+        line = raw_segment.strip()
+        if not line:
+            continue
+        if _python_line_dedents_first(line):
+            indent = max(0, indent - 1)
+        lines.append(("    " * indent) + line)
+        if _python_line_opens_block(line):
+            indent += 1
+
+    return "\n".join(lines)
+
+
 def _normalize_code_sample(text: str, language: str) -> str:
     """Clean and lightly format dataset-backed baseline code before it reaches participants."""
     normalized = _decode_escaped_newlines(text).replace("\r\n", "\n").replace("\r", "\n").strip()
@@ -338,8 +458,8 @@ def _normalize_code_sample(text: str, language: str) -> str:
     if "\n" not in normalized and language_key in c_like_languages:
         normalized = _format_flat_c_like_code(normalized)
 
-    if "\n" not in normalized and ";" in normalized and language_key == "python":
-        normalized = normalized.replace("; ", ";\n")
+    if "\n" not in normalized and language_key == "python":
+        normalized = _format_flat_python_code(normalized)
 
     return normalized + "\n"
 
@@ -886,6 +1006,7 @@ def _write_participant_log_template(log_csv: Path, snippet_ids: list[str], model
                     "turns": "0",
                     "applied_turns": "0",
                     "strategy_primary": "",
+                    "strategy_other_text": "",
                     "confidence_1to5": "",
                     "first_prompt": "",
                     "final_prompt": "",
@@ -1018,7 +1139,9 @@ def _write_participant_readme(
             [
                 "- Use only the assistant built into this kit.",
                 f"- This kit is locked to `{model_name}`.",
+                "- A snippet may or may not contain a vulnerability. You can use the chat to inspect the code, ask questions, or change it.",
                 "- Larger pasted code blocks can take longer to answer. If a reply is slow, wait before retrying or send a smaller function/block.",
+                "- If a reply stalls, use **Stop / Discard Reply** and then send a narrower follow-up question.",
                 "- Do not edit the kit files or switch to another assistant unless the research team told you to do that.",
             ]
         )
@@ -1044,7 +1167,9 @@ def _write_participant_readme(
             [
                 "- Use only the assistant built into this kit.",
                 "- You do not need to choose a model or edit the endpoint yourself.",
+                "- A snippet may or may not contain a vulnerability. You can use the chat to inspect the code, ask questions, or change it.",
                 "- Larger pasted code blocks can take longer to answer. If a reply is slow, wait before retrying or send a smaller function/block.",
+                "- If a reply stalls, use **Stop / Discard Reply** and then send a narrower follow-up question.",
                 "- Do not edit the kit files or switch to another assistant unless the research team told you to do that.",
             ]
         )
@@ -1061,15 +1186,17 @@ Use the launcher in this folder and do the rest of the work in the browser app. 
 3. Keep the command window or terminal open while you work.
 4. The browser app should open on its own. If it does not, copy the localhost URL shown in the launcher window into your browser.
 5. Use the onboarding window to complete the participant profile, then click **Begin Study**.
+6. The visible study timer starts only after you click **Begin Study**.
 
 ## 3) In-App Assistant
 {runtime_lines}
 
 ## 4) Finish And Return
 1. Complete all assigned snippets in the app.
-2. Use **Finish (Build ZIP)** when you are done.
-3. The kit writes the return ZIP into `exports/`.
-4. Send that ZIP back to the research team.
+2. Each snippet needs final submitted code, at least one in-app LLM turn, and the required summary fields before the kit will finish cleanly.
+3. Use **Finish (Build ZIP)** when you are done.
+4. The kit writes the return ZIP into `exports/`.
+5. Send that ZIP back to the research team.
 
 ## 5) Troubleshooting
 {troubleshooting_lines}
@@ -1104,6 +1231,7 @@ EXPORTS = PUBLIC_ROOT / "exports"
 LOG_CSV = RUN_DIR / "logs" / "snippet_log.csv"
 CHAT_LOG = RUN_DIR / "logs" / "chat_log.jsonl"
 PROFILE_JSON = RUN_DIR / "logs" / "participant_profile.json"
+EDITS_DIR = RUN_DIR / "edits"
 
 
 def _sha256_file(path: Path) -> str:
@@ -1172,6 +1300,8 @@ def _validate_snippet_log() -> list[str]:
         strategy = (row.get("strategy_primary") or "").strip()
         if strategy not in {{"zero_shot", "few_shot", "chain_of_thought", "adaptive_chain_of_thought", "other"}}:
             errors.append(f"Line {{idx}} ({{sid}}): strategy_primary must be one of zero_shot, few_shot, chain_of_thought, adaptive_chain_of_thought, other.")
+        if strategy == "other" and not (row.get("strategy_other_text") or "").strip():
+            errors.append(f"Line {{idx}} ({{sid}}): strategy_other_text is required when strategy_primary is other.")
 
         conf = _to_int(row.get("confidence_1to5") or "")
         if conf < 1 or conf > 5:
@@ -1263,6 +1393,27 @@ def _validate_participant_profile() -> list[str]:
     return errors
 
 
+def _validate_edited_outputs() -> list[str]:
+    errors: list[str] = []
+    if not EDITS_DIR.exists():
+        return [f"Missing edits folder: {{EDITS_DIR}}"]
+
+    blank_files: list[str] = []
+    for path in sorted(EDITS_DIR.iterdir()):
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            text = ""
+        if not text.strip():
+            blank_files.append(path.name)
+
+    if blank_files:
+        errors.append("Final Submitted Code is blank for: " + ", ".join(blank_files))
+    return errors
+
+
 def main() -> None:
     if not RUN_DIR.exists():
         raise FileNotFoundError(f"Missing run folder: {{RUN_DIR}}")
@@ -1270,7 +1421,8 @@ def main() -> None:
     log_errors = _validate_snippet_log()
     chat_errors = _validate_chat_log()
     profile_errors = _validate_participant_profile()
-    all_errors = log_errors + chat_errors + profile_errors
+    code_errors = _validate_edited_outputs()
+    all_errors = log_errors + chat_errors + profile_errors + code_errors
     if all_errors:
         print("Validation failed. Fix the following issues before packaging:")
         for msg in all_errors:
@@ -1347,7 +1499,7 @@ popd
 """
     launcher_bat = launcher_bat.replace("__APP_DIR__", PARTICIPANT_SUPPORT_DIR_NAME)
     launcher_sh = """#!/usr/bin/env bash
-set -euo pipefail
+set -eu
 APP_ROOT="$(dirname "$0")/__APP_DIR__"
 export PYTHONDONTWRITEBYTECODE=1
 
@@ -1370,7 +1522,8 @@ fi
     if participant_os == "windows":
         (kit_dir / "Launch_Study_Web_App.bat").write_text(launcher_bat, encoding="utf-8")
         return
-    (kit_dir / "Launch_Study_Web_App.sh").write_text(launcher_sh, encoding="utf-8")
+    with (kit_dir / "Launch_Study_Web_App.sh").open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(launcher_sh)
 
 
 def build_participant_kit(args: argparse.Namespace) -> None:

@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy.stats import norm
+from scipy.stats import chi2_contingency, norm
 
 
 _TRUTHY = {"1", "true", "t", "yes", "y"}
@@ -315,6 +315,58 @@ def fit_primary_mitigation_model(df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def language_experience_balance(df: pd.DataFrame) -> dict[str, Any]:
+    """Check whether language assignments are uneven across self-reported language experience."""
+    needed = {"participant_id", "language", "participant_language_experience"}
+    if df.empty or not needed.issubset(df.columns):
+        return {
+            "status": "no_rows",
+            "n_assignments": 0,
+            "table": {},
+        }
+
+    subset = (
+        df.loc[:, ["participant_id", "language", "participant_language_experience"]]
+        .copy()
+        .drop_duplicates()
+    )
+    subset["language"] = subset["language"].astype(str).str.strip().str.lower()
+    subset["participant_language_experience"] = (
+        subset["participant_language_experience"].astype(str).str.strip().str.lower()
+    )
+    subset = subset[
+        (subset["language"] != "")
+        & (subset["language"] != "unknown")
+        & (subset["participant_language_experience"] != "")
+    ]
+
+    if subset.empty:
+        return {
+            "status": "no_rows",
+            "n_assignments": 0,
+            "table": {},
+        }
+
+    table = pd.crosstab(subset["language"], subset["participant_language_experience"])
+    if table.shape[0] < 2 or table.shape[1] < 2:
+        return {
+            "status": "insufficient_variation",
+            "n_assignments": int(len(subset)),
+            "table": table.astype(int).to_dict(orient="index"),
+        }
+
+    chi2, p_value, dof, expected = chi2_contingency(table)
+    return {
+        "status": "ok",
+        "n_assignments": int(len(subset)),
+        "chi_square": float(chi2),
+        "p_value": float(p_value),
+        "degrees_of_freedom": int(dof),
+        "min_expected_count": float(np.min(expected)),
+        "table": table.astype(int).to_dict(orient="index"),
+    }
+
+
 def _text_summary(model: dict[str, Any]) -> str:
     """Render a concise text summary for the fitted model."""
     lines = [
@@ -370,11 +422,24 @@ def write_model_artifacts(*, runs_root: str | Path, out_csv: str | Path, out_jso
         dataset.to_csv(out_csv, index=False)
 
     model = fit_primary_mitigation_model(dataset)
+    balance = language_experience_balance(dataset)
     payload = {
         "dataset_rows": int(len(dataset)),
         "columns": list(dataset.columns),
         "model": model,
+        "language_experience_balance": balance,
     }
     out_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    out_txt.write_text(_text_summary(model), encoding="utf-8")
+    text = _text_summary(model)
+    text += "\nLanguage-assignment balance check\n"
+    text += f"Status: {balance.get('status', 'unknown')}\n"
+    text += f"Assignments: {balance.get('n_assignments', 0)}\n"
+    if balance.get("status") == "ok":
+        text += (
+            f"Chi-square: {balance.get('chi_square', 0.0):.4f}\n"
+            f"p-value: {balance.get('p_value', 0.0):.4f}\n"
+            f"Degrees of freedom: {balance.get('degrees_of_freedom', 0)}\n"
+            f"Minimum expected count: {balance.get('min_expected_count', 0.0):.4f}\n"
+        )
+    out_txt.write_text(text, encoding="utf-8")
     return payload

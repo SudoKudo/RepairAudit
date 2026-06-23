@@ -44,6 +44,7 @@ class InteractionRow:
     turns: int
     applied_turns: int
     strategy_primary: str
+    strategy_other_text: str
     confidence_1to5: int
     first_prompt: str
     final_prompt: str
@@ -93,6 +94,7 @@ def load_snippet_log_csv(path: Path) -> List[InteractionRow]:
                     turns=max(turns, 0),
                     applied_turns=max(min(applied, max(turns, 0)), 0),
                     strategy_primary=_normalize_strategy(r.get("strategy_primary") or "other"),
+                    strategy_other_text=(r.get("strategy_other_text") or "").strip(),
                     confidence_1to5=conf,
                     first_prompt=(r.get("first_prompt") or "").strip(),
                     final_prompt=(r.get("final_prompt") or "").strip(),
@@ -153,6 +155,7 @@ def merge_interaction_into_results(*, results_rows: List[Dict[str, str]], intera
                 "llm_applied_turns": "",
                 "llm_applied_ratio": "",
                 "llm_strategy_primary": "",
+                "llm_strategy_other_text": "",
                 "llm_confidence_1to5": "",
             })
             r2.pop("llm_strategy_secondary", None)
@@ -165,6 +168,7 @@ def merge_interaction_into_results(*, results_rows: List[Dict[str, str]], intera
                 "llm_applied_turns": str(ir.applied_turns),
                 "llm_applied_ratio": f"{ratio:.3f}",
                 "llm_strategy_primary": ir.strategy_primary,
+                "llm_strategy_other_text": ir.strategy_other_text,
                 "llm_confidence_1to5": str(ir.confidence_1to5),
             })
             r2.pop("llm_strategy_secondary", None)

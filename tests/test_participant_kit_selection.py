@@ -38,6 +38,16 @@ class ParticipantKitSelectionTests(unittest.TestCase):
         self.assertIn("if (x) {", formatted)
         self.assertTrue(formatted.endswith("\n"))
 
+    def test_python_dataset_formatter_breaks_flattened_statements(self) -> None:
+        source = "def demo(user): query = user.strip(); if query: return query"
+
+        formatted = participant_kit._normalize_code_sample(source, "Python")
+
+        self.assertIn("def demo(user):\n", formatted)
+        self.assertIn("    query = user.strip()\n", formatted)
+        self.assertIn("    if query:\n", formatted)
+        self.assertIn("        return query\n", formatted)
+
     def test_dataset_sampling_balances_hardness_with_bucket_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -373,6 +383,8 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                 self.assertTrue((out_root / "P888" / "Launch_Study_Web_App.sh").exists())
                 self.assertIn("Launch_Study_Web_App.sh", participant_readme)
                 self.assertNotIn("Launch_Study_Web_App.bat", participant_readme)
+                launcher_bytes = (out_root / "P888" / "Launch_Study_Web_App.sh").read_bytes()
+                self.assertNotIn(b"\r\n", launcher_bytes)
                 share_zip = out_root / "_share_zips" / "participant_kit_pilot_P888.zip"
                 self.assertTrue(share_zip.exists())
                 with ZipFile(share_zip, "r") as zf:

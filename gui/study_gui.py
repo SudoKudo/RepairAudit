@@ -38,6 +38,8 @@ STRATEGY_LABELS: list[tuple[str, str]] = [
     ("CoT", "cot"),
     ("Zero-shot", "zero_shot"),
     ("Few-shot", "few_shot"),
+    ("Adaptive CoT", "adaptive_cot"),
+    ("Self-verification", "self_verification"),
     ("Self-consistency", "self_consistency"),
 ]
 
@@ -58,6 +60,14 @@ def _resolve_run_dir(run_dir: Path) -> Path:
     if len(nested_candidates) == 1:
         return nested_candidates[0]
     return run_dir
+
+
+def _canonical_run_id(run_dir: Path) -> str:
+    """Return the participant-facing run identifier for direct and imported runs."""
+    resolved = _resolve_run_dir(run_dir)
+    if resolved.name.startswith("run_"):
+        return resolved.parent.name
+    return resolved.name
 
 
 def _resolve_output_path(repo_root: Path, value: str) -> Path:
@@ -578,23 +588,69 @@ class StudyGUI(tk.Tk):
             style="Hint.TLabel",
         ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 8))
 
+        self.detector_enabled_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            panel,
+            text="Enable detector diagnostics (SQLi/CMDi only)",
+            variable=self.detector_enabled_var,
+        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(0, 2))
+        ttk.Label(
+            panel,
+            text="Recommended off for the current multi-CWE dataset. Turn it on only for detector-supported families.",
+            style="Hint.TLabel",
+        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(0, 8))
+
         self.strategy_vars: dict[str, tk.BooleanVar] = {}
         ttk.Label(panel, text="Enabled Prompt Strategies", style="Field.TLabel").grid(
-            row=1, column=0, columnspan=4, sticky="w"
+            row=3, column=0, columnspan=4, sticky="w"
         )
 
         strategy_frame = ttk.Frame(panel, style="Panel.TFrame")
-        strategy_frame.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(3, 8))
-        for col in range(4):
+        strategy_frame.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(3, 8))
+        for col in range(3):
             strategy_frame.columnconfigure(col, weight=1)
         for idx, (label, key) in enumerate(STRATEGY_LABELS):
             var = tk.BooleanVar(value=True)
             self.strategy_vars[key] = var
-            ttk.Checkbutton(strategy_frame, text=label, variable=var).grid(row=0, column=idx, padx=(0, 8), pady=1, sticky="w")
+            ttk.Checkbutton(strategy_frame, text=label, variable=var).grid(
+                row=idx // 3,
+                column=idx % 3,
+                padx=(0, 8),
+                pady=1,
+                sticky="w",
+            )
 
         self.self_consistency_samples_var = tk.StringVar(value="5")
-        ttk.Label(panel, text="Self-Consistency Samples", style="Field.TLabel").grid(row=3, column=0, pady=3, sticky="w")
-        ttk.Entry(panel, textvariable=self.self_consistency_samples_var, width=8).grid(row=3, column=1, pady=3, sticky="w")
+        self.parser_mode_var = tk.StringVar(value="embedded_json")
+        self.vote_rule_var = tk.StringVar(value="majority")
+        self.use_frozen_config_var = tk.BooleanVar(value=False)
+
+        ttk.Label(panel, text="Self-Consistency Samples", style="Field.TLabel").grid(row=5, column=0, pady=3, sticky="w")
+        ttk.Entry(panel, textvariable=self.self_consistency_samples_var, width=8).grid(row=5, column=1, pady=3, sticky="w")
+        ttk.Label(panel, text="Parser Mode", style="Field.TLabel").grid(row=5, column=2, pady=3, sticky="w")
+        ttk.Combobox(
+            panel,
+            textvariable=self.parser_mode_var,
+            values=("strict_json", "embedded_json", "tolerant_json"),
+            width=16,
+            state="readonly",
+            style="Light.TCombobox",
+        ).grid(row=5, column=3, pady=3, sticky="w")
+
+        ttk.Label(panel, text="Vote Rule", style="Field.TLabel").grid(row=6, column=0, pady=3, sticky="w")
+        ttk.Combobox(
+            panel,
+            textvariable=self.vote_rule_var,
+            values=("majority", "conservative_present", "highest_confidence"),
+            width=20,
+            state="readonly",
+            style="Light.TCombobox",
+        ).grid(row=6, column=1, pady=3, sticky="w")
+        ttk.Checkbutton(
+            panel,
+            text="Use frozen judge config for participant scoring",
+            variable=self.use_frozen_config_var,
+        ).grid(row=6, column=2, columnspan=2, pady=3, sticky="w")
 
         self.gen_vars: dict[str, tk.StringVar] = {
             "temperature": tk.StringVar(value="0.2"),
@@ -609,7 +665,7 @@ class StudyGUI(tk.Tk):
         }
 
         gen = ttk.LabelFrame(panel, text="Generation Options", style="Card.TLabelframe", padding=(6, 5))
-        gen.grid(row=4, column=0, columnspan=4, pady=(4, 0), sticky="ew")
+        gen.grid(row=7, column=0, columnspan=4, pady=(4, 0), sticky="ew")
         for i in range(6):
             gen.columnconfigure(i, weight=1)
 
@@ -668,8 +724,14 @@ class StudyGUI(tk.Tk):
         ttk.Button(panel, text="Open HTML Report", command=self.open_html_report, style="Secondary.TButton").grid(
             row=3, column=0, columnspan=3, pady=(0, 6), sticky="ew"
         )
+        ttk.Button(panel, text="Build Judge Calibration", command=self.build_judge_calibration, style="Toolbar.TButton").grid(
+            row=4, column=0, columnspan=3, sticky="ew", pady=(0, 6)
+        )
+        ttk.Button(panel, text="Run Judge Audit", command=self.run_judge_audit, style="Toolbar.TButton").grid(
+            row=5, column=0, columnspan=3, sticky="ew", pady=(0, 6)
+        )
         ttk.Button(panel, text="Pre-Publish Repo Scan", command=self.run_privacy_check, style="Toolbar.TButton").grid(
-            row=4, column=0, columnspan=3, sticky="w"
+            row=6, column=0, columnspan=3, sticky="w"
         )
         ttk.Label(
             panel,
@@ -677,7 +739,7 @@ class StudyGUI(tk.Tk):
             style="Hint.TLabel",
             wraplength=340,
             justify="left",
-        ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ).grid(row=7, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
 
     def _build_status_panel(self, parent: ttk.Frame) -> None:
@@ -811,6 +873,18 @@ class StudyGUI(tk.Tk):
         """Return the derived HTML report path for the current aggregate output."""
         return _derived_report_path(self._aggregate_summary_path(), REPO_ROOT)
 
+    def _judge_calibration_path(self) -> Path:
+        """Return the default calibration CSV path."""
+        return REPO_ROOT / "data" / "aggregated" / "judge_calibration.csv"
+
+    def _judge_audit_root(self) -> Path:
+        """Return the directory that stores judge-audit runs."""
+        return REPO_ROOT / "data" / "aggregated" / "judge_audit"
+
+    def _judge_freeze_path(self) -> Path:
+        """Return the global frozen judge config path."""
+        return REPO_ROOT / "data" / "aggregated" / "judge_freeze.json"
+
     def _python_cmd(self, *args: str) -> list[str]:
         """Build a python command list using the currently running interpreter."""
         return [sys.executable, *args]
@@ -899,8 +973,12 @@ class StudyGUI(tk.Tk):
     def _snapshot_judge_settings(self) -> dict[str, Any]:
         """Capture judge strategy and generation options from UI controls."""
         return {
+            "detector_enabled": bool(self.detector_enabled_var.get()),
             "strategies": [k for k, v in self.strategy_vars.items() if v.get()],
             "self_consistency_samples": self.self_consistency_samples_var.get().strip(),
+            "parser_mode": self.parser_mode_var.get().strip(),
+            "vote_rule": self.vote_rule_var.get().strip(),
+            "use_frozen_config": bool(self.use_frozen_config_var.get()),
             "generation": {k: v.get().strip() for k, v in self.gen_vars.items()},
         }
 
@@ -969,6 +1047,7 @@ class StudyGUI(tk.Tk):
         judge_obj = form.get("judge")
         judge = judge_obj if isinstance(judge_obj, dict) else {}
         if judge:
+            self.detector_enabled_var.set(bool(judge.get("detector_enabled", self.detector_enabled_var.get())))
             selected_obj = judge.get("strategies")
             selected = set(selected_obj) if isinstance(selected_obj, list) else set()
             if selected:
@@ -976,6 +1055,9 @@ class StudyGUI(tk.Tk):
                     var.set(key in selected)
 
             self.self_consistency_samples_var.set(str(judge.get("self_consistency_samples", self.self_consistency_samples_var.get())))
+            self.parser_mode_var.set(str(judge.get("parser_mode", self.parser_mode_var.get())))
+            self.vote_rule_var.set(str(judge.get("vote_rule", self.vote_rule_var.get())))
+            self.use_frozen_config_var.set(bool(judge.get("use_frozen_config", self.use_frozen_config_var.get())))
 
             gen_obj = judge.get("generation")
             gen = gen_obj if isinstance(gen_obj, dict) else {}
@@ -998,7 +1080,7 @@ class StudyGUI(tk.Tk):
         if not hasattr(self, "participant_status_tree"):
             return
 
-        previous_selection = set(self._extract_selected_participant_ids())
+        previous_selection = set(self.participant_status_tree.selection())
         for item in self.participant_status_tree.get_children():
             self.participant_status_tree.delete(item)
 
@@ -1009,9 +1091,10 @@ class StudyGUI(tk.Tk):
         run_dirs = sorted([p for p in phase_root.iterdir() if p.is_dir()], key=lambda p: p.name)
         selected_items: list[str] = []
         for run_dir in run_dirs:
+            display_id = _canonical_run_id(run_dir)
             st = self._step_status_for_run(REPO_ROOT / self._run_dir(run_dir.name))
             values = (
-                run_dir.name,
+                display_id,
                 "OK" if st.get("Run Analyzed", False) else "...",
                 "OK" if st.get("Interaction Merged", False) else "...",
                 "OK" if st.get("Pilot Aggregated", False) else "...",
@@ -1020,7 +1103,7 @@ class StudyGUI(tk.Tk):
             )
             completed = sum(1 for flag in st.values() if flag)
             tag = "ok" if completed == len(PIPELINE_STEPS) else "pending" if completed == 0 else "mixed"
-            item_id = self.participant_status_tree.insert("", "end", values=values, tags=(tag,))
+            item_id = self.participant_status_tree.insert("", "end", iid=run_dir.name, values=values, tags=(tag,))
             if run_dir.name in previous_selection:
                 selected_items.append(item_id)
 
@@ -1028,15 +1111,10 @@ class StudyGUI(tk.Tk):
             self.participant_status_tree.selection_set(selected_items)
 
     def _extract_selected_participant_ids(self) -> list[str]:
-        """Return participant IDs currently selected in the unified status table."""
+        """Return the selected run-folder names currently selected in the status table."""
         if not hasattr(self, "participant_status_tree"):
             return []
-        selected: list[str] = []
-        for item_id in self.participant_status_tree.selection():
-            values = self.participant_status_tree.item(item_id, "values")
-            if values:
-                selected.append(str(values[0]))
-        return selected
+        return [str(item_id) for item_id in self.participant_status_tree.selection()]
 
     def _select_all_participants(self) -> None:
         """Select all participants in the unified status table."""
@@ -1079,7 +1157,7 @@ class StudyGUI(tk.Tk):
     def _step_status_for_run(self, run_dir: Path) -> dict[str, bool]:
         """Compute pipeline completion booleans for one run folder."""
         run_dir = _resolve_run_dir(run_dir)
-        run_id = run_dir.parent.name if run_dir.name.startswith("run_") else run_dir.name
+        run_id = _canonical_run_id(run_dir)
         out = {step: False for step in PIPELINE_STEPS}
         out["Run Analyzed"] = (run_dir / "analysis" / "results.csv").exists()
 
@@ -1146,16 +1224,56 @@ class StudyGUI(tk.Tk):
             "num_ctx": int(self.gen_vars["num_ctx"].get().strip()),
         }
 
-        env = {
-            "GLACIER_JUDGE_STRATEGY_MODE": "ensemble" if len(selected) > 1 else "single",
-            "GLACIER_JUDGE_PRIMARY_STRATEGY": selected[0],
-            "GLACIER_JUDGE_SELECTED_STRATEGIES": ",".join(selected),
-            "GLACIER_JUDGE_VOTE_RULE": "majority",
-            "GLACIER_JUDGE_MIN_CONFIDENCE": "0.0",
+        env = {"GLACIER_ENABLE_DETECTOR": "1" if self.detector_enabled_var.get() else "0"}
+        if self.use_frozen_config_var.get():
+            freeze_path = REPO_ROOT / "data" / "aggregated" / "judge_freeze.json"
+            if not freeze_path.exists():
+                raise ValueError(f"Frozen judge config not found: {freeze_path}")
+            env.update(
+                {
+                    "GLACIER_JUDGE_USE_FROZEN": "1",
+                    "GLACIER_JUDGE_FREEZE_PATH": str(freeze_path),
+                }
+            )
+            return env
+
+        env.update(
+            {
+                "GLACIER_JUDGE_USE_FROZEN": "0",
+                "GLACIER_JUDGE_STRATEGY_MODE": "ensemble" if len(selected) > 1 else "single",
+                "GLACIER_JUDGE_PRIMARY_STRATEGY": selected[0],
+                "GLACIER_JUDGE_SELECTED_STRATEGIES": ",".join(selected),
+                "GLACIER_JUDGE_PARSER_MODE": self.parser_mode_var.get().strip(),
+                "GLACIER_JUDGE_VOTE_RULE": self.vote_rule_var.get().strip(),
+                "GLACIER_JUDGE_MIN_CONFIDENCE": "0.0",
+                "GLACIER_JUDGE_OPTIONS_JSON": json.dumps(options),
+                "GLACIER_JUDGE_SELF_CONSISTENCY_SAMPLES": str(sc_samples),
+            }
+        )
+        return env
+
+    def _collect_judge_audit_env(self) -> dict[str, str]:
+        """Build judge runtime overrides for calibration and audit runs."""
+        sc_samples = int(self.self_consistency_samples_var.get().strip())
+        if sc_samples < 1:
+            raise ValueError("Self-consistency samples must be >= 1.")
+
+        options = {
+            "temperature": float(self.gen_vars["temperature"].get().strip()),
+            "top_p": float(self.gen_vars["top_p"].get().strip()),
+            "top_k": int(self.gen_vars["top_k"].get().strip()),
+            "num_predict": int(self.gen_vars["num_predict"].get().strip()),
+            "repeat_penalty": float(self.gen_vars["repeat_penalty"].get().strip()),
+            "presence_penalty": float(self.gen_vars["presence_penalty"].get().strip()),
+            "frequency_penalty": float(self.gen_vars["frequency_penalty"].get().strip()),
+            "seed": int(self.gen_vars["seed"].get().strip()),
+            "num_ctx": int(self.gen_vars["num_ctx"].get().strip()),
+        }
+        return {
+            "GLACIER_JUDGE_USE_FROZEN": "0",
             "GLACIER_JUDGE_OPTIONS_JSON": json.dumps(options),
             "GLACIER_JUDGE_SELF_CONSISTENCY_SAMPLES": str(sc_samples),
         }
-        return env
 
     # ------------------------------------------------------------------
     # Workflow engine (start/pause/stop/resume)
@@ -1534,6 +1652,118 @@ class StudyGUI(tk.Tk):
     # ------------------------------------------------------------------
     # User actions
     # ------------------------------------------------------------------
+
+    def build_judge_calibration(self) -> None:
+        """Refresh the researcher-side calibration CSV used by judge auditing."""
+        steps = [
+            CommandStep(
+                label="Build Judge Calibration",
+                command=self._python_cmd(
+                    "-m",
+                    "scripts.study_cli",
+                    "build-judge-calibration",
+                    "--metadata_csv",
+                    self.metadata_var.get().strip(),
+                    "--out_csv",
+                    _path_arg_for_repo(REPO_ROOT, self._judge_calibration_path()),
+                ),
+            )
+        ]
+        self._start_workflow(
+            "build_judge_calibration",
+            steps,
+            on_complete=lambda: self._show_message(
+                "info",
+                "Judge Calibration Ready",
+                f"Calibration CSV written to {self._judge_calibration_path()}",
+            ),
+            on_failure=lambda step_label: self._show_message(
+                "error",
+                "Judge Calibration Failed",
+                f"The workflow stopped at '{step_label}'. Review the Execution Log for details.",
+            ),
+            on_stopped=lambda: self._show_message(
+                "warning",
+                "Judge Calibration Stopped",
+                "The calibration build was stopped before completion.",
+            ),
+        )
+
+    def run_judge_audit(self) -> None:
+        """Run the judge calibration sweep and write a frozen config."""
+        selected = [name for name, var in self.strategy_vars.items() if var.get()]
+        if not selected:
+            messagebox.showerror("Invalid judge settings", "Enable at least one prompt strategy.")
+            return
+
+        try:
+            audit_env = self._collect_judge_audit_env()
+        except Exception as exc:
+            messagebox.showerror("Invalid judge settings", str(exc))
+            return
+
+        calibration_csv = self._judge_calibration_path()
+        audit_root = self._judge_audit_root()
+        freeze_path = self._judge_freeze_path()
+        parser_modes = ["strict_json", "embedded_json", "tolerant_json"]
+        vote_rules = ["majority", "conservative_present", "highest_confidence"]
+
+        steps = [
+            CommandStep(
+                label="Build Judge Calibration",
+                command=self._python_cmd(
+                    "-m",
+                    "scripts.study_cli",
+                    "build-judge-calibration",
+                    "--metadata_csv",
+                    self.metadata_var.get().strip(),
+                    "--out_csv",
+                    _path_arg_for_repo(REPO_ROOT, calibration_csv),
+                ),
+            ),
+            CommandStep(
+                label="Run Judge Audit",
+                command=self._python_cmd(
+                    "-m",
+                    "scripts.study_cli",
+                    "judge-audit",
+                    "--calibration_csv",
+                    _path_arg_for_repo(REPO_ROOT, calibration_csv),
+                    "--out_root",
+                    _path_arg_for_repo(REPO_ROOT, audit_root),
+                    "--write_global_freeze",
+                    "--freeze_out",
+                    _path_arg_for_repo(REPO_ROOT, freeze_path),
+                    "--strategies",
+                    *selected,
+                    "--parser_modes",
+                    *parser_modes,
+                    "--vote_rules",
+                    *vote_rules,
+                ),
+                env=audit_env,
+            ),
+        ]
+
+        self._start_workflow(
+            "run_judge_audit",
+            steps,
+            on_complete=lambda: self._show_message(
+                "info",
+                "Judge Audit Complete",
+                f"Judge audit finished and wrote the frozen config to {freeze_path}",
+            ),
+            on_failure=lambda step_label: self._show_message(
+                "error",
+                "Judge Audit Failed",
+                f"The workflow stopped at '{step_label}'. Review the Execution Log for details.",
+            ),
+            on_stopped=lambda: self._show_message(
+                "warning",
+                "Judge Audit Stopped",
+                "The judge audit was stopped before completion.",
+            ),
+        )
 
     def start_analysis(self) -> None:
         """Run full pipeline for selected participants.

@@ -1,9 +1,4 @@
-"""Participant-facing local web app template used in generated study kits.
-
-The generated file serves baseline snippets, collects edited code plus summary
-metadata, proxies chat calls to the configured LLM endpoint, and builds the
-participant return ZIP.
-"""
+"""Participant web app template stamped into each generated kit."""
 
 from __future__ import annotations
 
@@ -130,11 +125,7 @@ class OllamaChatCancelled(RuntimeError):
 
 
 class StudyStore:
-    """Data layer for the participant web app.
-
-    This class keeps file contracts and validation rules centralized so the UI
-    can stay simple while the study data remains consistent.
-    """
+    """Data layer for the participant web app."""
 
     def __init__(self, kit_root: Path) -> None:
         """Bind the participant kit paths and load the locked study configuration."""
@@ -1819,12 +1810,12 @@ function buildInAppGuide(data){
     "- Use the assistant that comes with this kit.",
     "- Each snippet must include at least one in-app LLM turn.",
     "- A turn is one logged message in the current snippet chat.",
-    "- Do not send study code to outside assistants or web services unless the research team told you to do that.",
+    "- Do not send study code to outside assistants or web services unless the research team told you to.",
     "",
     "Snippet Summary",
     "- Tip: hover over labels and buttons in the app if you need the field description.",
     "- Applied Turns: non-negative integer, must be <= total logged turns. Count only assistant turns that changed your final code.",
-    "- Primary Strategy: pick the main prompt style you used for this snippet. If you choose Other, add a short description.",
+    "- Primary Strategy: pick the main prompt style you used for this snippet. If you choose Other, add a short note.",
     "- Confidence: choose a value from 1 to 5.",
     "- Notes: optional short factual notes.",
     "",
@@ -1836,7 +1827,7 @@ function buildInAppGuide(data){
     "- Session timer (resume-aware)",
     "",
     "If The Assistant Stalls",
-    "- Larger pasted code blocks can take noticeably longer to answer.",
+    "- Larger pasted code blocks can take longer to answer.",
     "- Retry once with a narrower question or code block.",
     "- If it still fails, keep your current code changes and continue.",
     "",
@@ -1926,12 +1917,12 @@ function buildOnboardingHtml(data){
   var started = !!(data && data.timer && data.timer.study_started);
   return [
     started
-      ? "<p>Use this page as a quick reference while you work. The timer is already running.</p>"
+      ? "<p>Use this page as a reference while you work. The timer is already running.</p>"
       : "<p>Complete the study inside this app. The README is only for setup and launch.</p>",
     "<h3>How To Complete Each Snippet</h3>",
     "<ul>",
     "<li>Select a snippet from the left list.</li>",
-    "<li>Review the baseline code and decide whether you want to inspect it, ask questions about it, or change it.</li>",
+    "<li>Review the baseline code and decide whether you want to inspect it, ask questions, or change it.</li>",
     "<li>Use the in-app chat however you normally would. If you decide a change is needed, place your final answer in <strong>Final Submitted Code</strong>.</li>",
     "<li>The baseline pane is reference-only. Only <strong>Final Submitted Code</strong> is exported for analysis.</li>",
     started
@@ -1943,7 +1934,7 @@ function buildOnboardingHtml(data){
     "<li>After all snippets are complete, click <strong>Finish (Build ZIP)</strong>.</li>",
     "</ul>",
     "<h3>Assigned Assistant</h3>",
-    "<p>Use the assistant built into this kit. Do not switch to outside assistants or edit the kit files unless the research team told you to do that.</p>",
+    "<p>Use the assistant built into this kit. Do not switch to outside assistants or edit the kit files unless the research team told you to.</p>",
     "<h3>What Counts As A Turn</h3>",
     "<p>A turn is one logged message in the in-app chat. The app auto-logs total turns for each snippet.</p>",
     "<p><strong>Applied Turns</strong> means how many assistant turns directly changed your final code.</p>",
@@ -1957,7 +1948,7 @@ function buildOnboardingHtml(data){
     "</ul>",
     "<h3>If The Assistant Refuses Or Fails</h3>",
     "<ul>",
-    "<li>Larger pasted code blocks can take noticeably longer to answer.</li>",
+    "<li>Larger pasted code blocks can take longer to answer.</li>",
     "<li>Retry once with a narrower question or code block.</li>",
     "<li>If it still fails, keep your current code changes and move on.</li>",
     "</ul>",

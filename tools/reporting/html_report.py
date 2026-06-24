@@ -48,6 +48,14 @@ def _resolve_run_dir(run_dir: Path) -> Path:
     return run_dir
 
 
+def _canonical_run_id(run_dir: Path) -> str:
+    """Return the participant-facing run identifier for direct and imported runs."""
+    resolved = _resolve_run_dir(run_dir)
+    if resolved.name.startswith("run_"):
+        return resolved.parent.name
+    return resolved.name
+
+
 def _read_text(path: Path) -> str:
     """Read UTF-8 text from a file and return empty text on failure."""
     try:
@@ -191,7 +199,8 @@ def _snippet_paths(repo_root: Path, row: Dict[str, Any], edits_dir: Path) -> Tup
     edited_name = str(row.get("edited_filename", "") or "").strip()
 
     if baseline_rel:
-        baseline = repo_root / baseline_rel
+        baseline_path = Path(baseline_rel)
+        baseline = baseline_path if baseline_path.is_absolute() else (repo_root / baseline_path)
         edited = edits_dir / (edited_name or baseline.name)
     else:
         prefix = snippet_id.split("_", 1)[0]
@@ -200,10 +209,10 @@ def _snippet_paths(repo_root: Path, row: Dict[str, Any], edits_dir: Path) -> Tup
         edited = edits_dir / fallback_name
 
     if gold_rel:
-        gold = repo_root / gold_rel
+        gold_path = Path(gold_rel)
+        gold = gold_path if gold_path.is_absolute() else (repo_root / gold_path)
     else:
-        prefix = snippet_id.split("_", 1)[0]
-        gold = repo_root / "snippets" / "gold" / prefix / baseline.name
+        gold = Path()
 
     return baseline, gold, edited
 
@@ -220,7 +229,7 @@ def discover_runs(runs_root: Path) -> List[RunPaths]:
         if (analysis_dir / "results.csv").exists() and (analysis_dir / "summary.json").exists():
             runs.append(
                 RunPaths(
-                    run_id=participant_dir.name,
+                    run_id=_canonical_run_id(participant_dir),
                     run_dir=run_dir,
                     analysis_dir=analysis_dir,
                     edits_dir=run_dir / "edits",
@@ -522,6 +531,50 @@ def _build_insights(global_metrics: Dict[str, Any], strategy_metrics: List[Dict[
     return insights
 
 
+def _load_judge_audit_summary(repo_root: Path) -> Dict[str, Any]:
+    """Load the frozen judge config and its audit summary when present."""
+    freeze_path = repo_root / "data" / "aggregated" / "judge_freeze.json"
+    if not freeze_path.exists():
+        return {}
+
+    freeze_payload = _read_json(freeze_path)
+    llm_block = freeze_payload.get("llm_judge") if isinstance(freeze_payload.get("llm_judge"), dict) else {}
+    enabled = []
+    strategies = llm_block.get("strategies") if isinstance(llm_block, dict) else {}
+    if isinstance(strategies, dict):
+        enabled = sorted(
+            str(name)
+            for name, block in strategies.items()
+            if isinstance(block, dict) and bool(block.get("enabled"))
+        )
+
+    summary_path_raw = str(freeze_payload.get("audit_summary_path") or "").strip()
+    summary_payload: Dict[str, Any] = {}
+    if summary_path_raw:
+        summary_path = Path(summary_path_raw)
+        if not summary_path.is_absolute():
+            summary_path = (repo_root / summary_path).resolve()
+        if summary_path.exists():
+            summary_payload = _read_json(summary_path)
+
+    recommended_metrics = (
+        freeze_payload.get("recommended_metrics")
+        if isinstance(freeze_payload.get("recommended_metrics"), dict)
+        else {}
+    )
+    return {
+        "freeze_path": str(freeze_path.resolve()),
+        "generated_at": str(freeze_payload.get("generated_at") or "").strip(),
+        "recommended_config_id": str(freeze_payload.get("recommended_config_id") or "").strip(),
+        "parser_mode": str(llm_block.get("parser_mode") or "").strip(),
+        "strategy_mode": str(llm_block.get("strategy_mode") or "").strip(),
+        "vote_rule": str(((llm_block.get("ensemble") or {}).get("vote_rule", "")) if isinstance(llm_block.get("ensemble"), dict) else "").strip(),
+        "enabled_strategies": enabled,
+        "recommended_metrics": recommended_metrics,
+        "strategy_diagnostics": summary_payload.get("strategy_diagnostics", []),
+    }
+
+
 def build_aggregated_report_offline(
     *,
     repo_root: Path,
@@ -625,6 +678,7 @@ def build_aggregated_report_offline(
     global_metrics = _compute_global_metrics(run_models)
     filters = _compute_filter_values(all_rows, strategy_rows)
     insights = _build_insights(global_metrics, strategy_metrics)
+    judge_audit = _load_judge_audit_summary(repo_root)
 
     html = Template(_TEMPLATE).render(
         title=title,
@@ -635,6 +689,7 @@ def build_aggregated_report_offline(
         strategy_metrics=strategy_metrics,
         filters=filters,
         insights=insights,
+        judge_audit=judge_audit,
     )
 
     out_html.write_text(html, encoding="utf-8")
@@ -756,6 +811,46 @@ _TEMPLATE = r"""<!doctype html>
       </ul>
     </div>
 
+    {% if judge_audit %}
+    <div class="section-title">Judge Audit</div>
+    <div class="panel">
+      <div class="hint" style="margin-bottom:8px;">
+        Researcher-side judge calibration summary. The frozen config shown here is the one intended for participant-run scoring.
+      </div>
+      <div class="kpis" style="margin-top:0;">
+        <div class="kpi"><h3>Frozen Parser</h3><div class="v info" style="font-size:18px;">{{ judge_audit.parser_mode or 'n/a' }}</div></div>
+        <div class="kpi"><h3>Frozen Vote Rule</h3><div class="v info" style="font-size:18px;">{{ judge_audit.vote_rule or 'n/a' }}</div></div>
+        <div class="kpi"><h3>Audit Accuracy</h3><div class="v good">{{ '%.2f'|format(judge_audit.recommended_metrics.accuracy if judge_audit.recommended_metrics else 0.0) }}</div></div>
+        <div class="kpi"><h3>Audit Effective F1</h3><div class="v good">{{ '%.2f'|format(judge_audit.recommended_metrics.effective_f1 if judge_audit.recommended_metrics else 0.0) }}</div></div>
+      </div>
+      <div class="hint" style="margin-top:10px;">
+        Recommended config: {{ judge_audit.recommended_config_id }}<br/>
+        Enabled strategies: {{ judge_audit.enabled_strategies|join(', ') if judge_audit.enabled_strategies else "n/a" }}<br/>
+        Freeze artifact: {{ judge_audit.freeze_path }}
+      </div>
+      {% if judge_audit.strategy_diagnostics %}
+      <table style="margin-top:12px;">
+        <thead><tr>
+          <th data-type="text">Parser mode</th>
+          <th data-type="number">Cases compared</th>
+          <th data-type="number">Strategy disagreement</th>
+          <th data-type="number">Mean entropy</th>
+        </tr></thead>
+        <tbody>
+          {% for row in judge_audit.strategy_diagnostics %}
+          <tr>
+            <td>{{ row.parser_mode }}</td>
+            <td>{{ row.cases_compared }}</td>
+            <td>{{ '%.2f'|format(row.strategy_disagreement_rate) }}</td>
+            <td>{{ '%.2f'|format(row.mean_strategy_entropy) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+    {% endif %}
+
     <div class="section-title">Prompt Strategy Analytics</div>
     <div class="panel">
       <div class="hint" style="margin-bottom:8px;">Sortable metrics from per-strategy LLM judge decisions.</div>
@@ -868,7 +963,7 @@ _TEMPLATE = r"""<!doctype html>
             <td>{{ '%.2f'|format(run.summary.primary_rates.mitigation if run.summary.primary_rates else 0.0) }}</td>
             <td>{{ '%.2f'|format(run.summary.primary_rates.persistence if run.summary.primary_rates else 0.0) }}</td>
             <td>{{ '%.2f'|format(run.summary.primary_rates.abstention if run.summary.primary_rates else 0.0) }}</td>
-            <td>{{ '%.2f'|format(run.summary.judge_detector_disagreement_rate if run.summary.judge_detector_disagreement_rate else 0.0) }}</td>
+            <td>{% if (run.summary.scored_snippets if run.summary.scored_snippets is defined else 0)|int > 0 %}{{ '%.2f'|format(run.summary.judge_detector_disagreement_rate if run.summary.judge_detector_disagreement_rate else 0.0) }}{% else %}N/A{% endif %}</td>
             <td>{{ '%.2f'|format(run.summary.interaction.avg_turns if run.summary.interaction else 0.0) }}</td>
           </tr>
           {% endfor %}

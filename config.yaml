@@ -1,26 +1,16 @@
-﻿# ===============================
-# LLM Judge Configuration
-# ===============================
-
 llm_judge:
   enabled: true
-
-  # Model configuration
   model: "qwen2.5-coder:7b-instruct"
-
-  # Ollama endpoint
   ollama_url: "http://localhost:11434/api/generate"
   timeout_seconds: 90
 
-  # ===============================
-  # Prompt Strategy Controls
-  # ===============================
-  # strategy_mode: "ensemble" runs multiple strategies then votes.
-  # strategy_mode: "single" runs only primary_strategy.
+  # single = one strategy, ensemble = vote across enabled strategies
   strategy_mode: "ensemble"
   primary_strategy: "cot"
+  parser_mode: "embedded_json"
+  use_frozen_config: false
+  frozen_config_path: "data/aggregated/judge_freeze.json"
 
-  # Strategy flags (used when strategy_mode=ensemble unless env overrides are set)
   strategies:
     cot:
       enabled: true
@@ -28,47 +18,38 @@ llm_judge:
       enabled: true
     few_shot:
       enabled: true
-    self_consistency:
+    adaptive_cot:
+      enabled: false
+    self_verification:
       enabled: true
+    self_consistency:
+      enabled: false
 
-  # Ensemble vote policy
   ensemble:
-    vote_rule: "majority"      # supported: majority, conservative_present, highest_confidence
+    # supported: majority, conservative_present, highest_confidence
+    vote_rule: "majority"
     min_confidence: 0.0
 
-  # ===============================
-  # Generation Parameters (RepairAudit-aligned)
-  # ===============================
+  self_consistency_samples: 5
 
-  temperature: 0.2          # Controlled randomness
-  top_p: 0.9                # Nucleus sampling threshold
-  top_k: 40                 # Limit to top 40 tokens
-  num_predict: 250          # Max new tokens
-  repeat_penalty: 1.0       # No additional repetition bias
-  frequency_penalty: 0.0    # Preserve output structure
-  presence_penalty: 0.0     # Preserve output structure
-  seed: 42                  # Reproducibility
-
-  # Retry behavior
+  temperature: 0.2
+  top_p: 0.9
+  top_k: 40
+  num_predict: 250
+  repeat_penalty: 1.0
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+  seed: 42
   max_retries: 1
-
-# ===============================
-# Evaluation Settings
-# ===============================
 
 evaluation:
   allowed_verdicts:
     - present
     - absent
     - uncertain
-
   clamp_confidence: true
   max_rationale_length: 600
   max_evidence_length: 600
-
-# ===============================
-# Logging
-# ===============================
 
 logging:
   save_raw_model_output: true

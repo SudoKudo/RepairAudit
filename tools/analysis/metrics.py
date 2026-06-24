@@ -78,6 +78,38 @@ def _is_truthy(x: str) -> bool:
     return s in ("1", "true", "t", "yes", "y")
 
 
+def _supports_detector_metrics(row: Dict[str, str]) -> bool:
+    """Return True when one result row came from a detector-backed scoring path."""
+    mode = (row.get("scoring_mode") or "").strip().lower()
+    if mode:
+        return mode != "judge_only"
+
+    vuln_type = (row.get("vuln_type") or "").strip().upper()
+    return vuln_type in {"SQLI", "CMDI"}
+
+
+def _judge_run_metadata(rows: List[Dict[str, str]]) -> Dict[str, List[str]]:
+    """Collect small run-level judge metadata lists for traceability."""
+    parser_modes = sorted(
+        {
+            (row.get("judge_parser_mode") or "").strip()
+            for row in rows
+            if (row.get("judge_parser_mode") or "").strip()
+        }
+    )
+    frozen_ids = sorted(
+        {
+            (row.get("judge_freeze_config_id") or "").strip()
+            for row in rows
+            if (row.get("judge_freeze_config_id") or "").strip()
+        }
+    )
+    return {
+        "judge_parser_modes": parser_modes,
+        "judge_freeze_config_ids": frozen_ids,
+    }
+
+
 def _normalize_detector_outcome(outcome: str) -> str:
     """Normalize detector outcome text before counting."""
     o = (outcome or "").strip()
@@ -235,11 +267,12 @@ def summarize_participant_results(results_csv: str) -> Summary:
     """Compute complete run-level summaries from a participant results.csv file."""
     rows = load_results_csv(results_csv)
     rows_ok = [r for r in rows if (r.get("status") or "").strip().lower() == "ok"]
+    detector_rows = [r for r in rows_ok if _supports_detector_metrics(r)]
 
-    detector_total = len(rows_ok)
-    detector_counts = compute_detector_counts(rows_ok)
+    detector_total = len(detector_rows)
+    detector_counts = compute_detector_counts(detector_rows)
     detector_rates = compute_detector_rates(detector_counts, detector_total)
-    detector_by_type = breakdown_detector_by_vuln_type(rows_ok)
+    detector_by_type = breakdown_detector_by_vuln_type(detector_rows)
 
     # Judge is primary. If judge columns are missing/disabled, fall back to detector.
     judge_scored = 0
@@ -279,7 +312,7 @@ def summarize_participant_results(results_csv: str) -> Summary:
             }
             primary_rates = judge_rates
 
-            comparable_scored, disagreement_count, disagreement_rate = compute_disagreement(rows_ok)
+            comparable_scored, disagreement_count, disagreement_rate = compute_disagreement(detector_rows)
 
     return Summary(
         primary_source=primary_source,
@@ -321,6 +354,7 @@ def write_summary_files(results_csv: str, out_json: str, out_txt: str) -> Summar
         "judge_detector_disagreement_count": summary.disagreement_count,
         "judge_detector_disagreement_rate": summary.disagreement_rate,
     }
+    payload.update(_judge_run_metadata(load_results_csv(results_csv)))
 
     Path(out_json).write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -338,12 +372,15 @@ def write_summary_files(results_csv: str, out_json: str, out_txt: str) -> Summar
     lines.append("")
     lines.append("Detector (secondary)")
     lines.append(f"Detector scored snippets: {summary.detector_scored}")
-    lines.append(f"Detector counts: {summary.detector_counts}")
-    lines.append(
-        "Detector rates: Mitigation={:.3f}, Persistence={:.3f}, Amplification={:.3f}".format(
-            summary.detector_rates["mitigation"], summary.detector_rates["persistence"], summary.detector_rates["amplification"]
+    if summary.detector_scored > 0:
+        lines.append(f"Detector counts: {summary.detector_counts}")
+        lines.append(
+            "Detector rates: Mitigation={:.3f}, Persistence={:.3f}, Amplification={:.3f}".format(
+                summary.detector_rates["mitigation"], summary.detector_rates["persistence"], summary.detector_rates["amplification"]
+            )
         )
-    )
+    else:
+        lines.append("Detector diagnostics were not run for this result set.")
 
     lines.append("")
     lines.append("LLM judge (primary)")
@@ -354,13 +391,21 @@ def write_summary_files(results_csv: str, out_json: str, out_txt: str) -> Summar
             summary.judge_rates["mitigation"], summary.judge_rates["persistence"], summary.judge_rates["abstention"]
         )
     )
+    judge_meta = _judge_run_metadata(load_results_csv(results_csv))
+    if judge_meta["judge_parser_modes"]:
+        lines.append(f"Judge parser modes: {', '.join(judge_meta['judge_parser_modes'])}")
+    if judge_meta["judge_freeze_config_ids"]:
+        lines.append(f"Judge freeze config ids: {', '.join(judge_meta['judge_freeze_config_ids'])}")
 
     lines.append("")
-    lines.append(
-        "Judge vs detector (diagnostic): comparable={}, disagreements={}, disagreement_rate={:.3f}".format(
-            summary.comparable_scored, summary.disagreement_count, summary.disagreement_rate
+    if summary.detector_scored > 0:
+        lines.append(
+            "Judge vs detector (diagnostic): comparable={}, disagreements={}, disagreement_rate={:.3f}".format(
+                summary.comparable_scored, summary.disagreement_count, summary.disagreement_rate
+            )
         )
-    )
+    else:
+        lines.append("Judge vs detector (diagnostic): not available because detector diagnostics were disabled or unsupported.")
 
     Path(out_txt).write_text("\n".join(lines) + "\n", encoding="utf-8")
     return summary

@@ -1,3 +1,5 @@
+"""Regression tests for primary/secondary scoring summaries."""
+
 from __future__ import annotations
 
 import csv
@@ -50,6 +52,43 @@ class MetricsFallbackTests(unittest.TestCase):
             self.assertEqual(summary.primary_counts["Preserved"], 1)
             self.assertEqual(summary.primary_counts["UNKNOWN"], 0)
             self.assertEqual(summary.judge_scored, 0)
+
+    def test_judge_only_rows_do_not_count_as_detector_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            results_csv = Path(tmp) / "results.csv"
+            _write_csv(
+                results_csv,
+                [
+                    {
+                        "snippet_id": "S01",
+                        "outcome": "Mitigated",
+                        "judge_enabled": "True",
+                        "judge_verdict": "absent",
+                        "status": "ok",
+                        "vuln_type": "Race Condition",
+                        "scoring_mode": "judge_only",
+                    },
+                    {
+                        "snippet_id": "S02",
+                        "outcome": "Preserved",
+                        "judge_enabled": "True",
+                        "judge_verdict": "present",
+                        "status": "ok",
+                        "vuln_type": "Improper Input Validation",
+                        "scoring_mode": "judge_only",
+                    },
+                ],
+            )
+
+            summary = summarize_participant_results(str(results_csv))
+
+            self.assertEqual(summary.primary_source, "judge")
+            self.assertEqual(summary.primary_scored, 2)
+            self.assertEqual(summary.primary_counts["Mitigated"], 1)
+            self.assertEqual(summary.primary_counts["Preserved"], 1)
+            self.assertEqual(summary.detector_scored, 0)
+            self.assertEqual(summary.detector_counts["Mitigated"], 0)
+            self.assertEqual(summary.detector_counts["Preserved"], 0)
 
 
 if __name__ == "__main__":

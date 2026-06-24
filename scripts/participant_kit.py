@@ -1,8 +1,4 @@
-"""RepairAudit participant kit generation utilities.
-
-This module creates participant-facing packages that contain only the files
-needed to perform code edits and return structured workflow data.
-"""
+"""Build participant kits and clean up local kit folders."""
 
 from __future__ import annotations
 
@@ -215,6 +211,29 @@ def _build_participant_snippet_mappings(
         snippet_files[participant_snippet_id] = participant_filename
         snippet_labels[participant_snippet_id] = participant_label
     return participant_rows, snippet_files, snippet_labels
+
+
+def _study_assignment_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Trim participant assignment rows down to the fields analysis needs later."""
+    out: list[dict[str, str]] = []
+    for row in rows:
+        out.append(
+            {
+                "snippet_id": _clean_text(row.get("snippet_id")),
+                "participant_filename": _clean_text(row.get("participant_filename")),
+                "participant_label": _clean_text(row.get("participant_label")),
+                "source_kind": _clean_text(row.get("source_kind")),
+                "language": _clean_text(row.get("language")),
+                "vuln_type": _clean_text(row.get("vuln_type")),
+                "vulnerability_type": _clean_text(row.get("vulnerability_type")),
+                "cwe": _clean_text(row.get("cwe")),
+                "cwe_primary": _clean_text(row.get("cwe_primary")),
+                "baseline_relpath": _clean_text(row.get("baseline_relpath")),
+                "gold_relpath": _clean_text(row.get("gold_relpath")),
+                "is_vulnerable": _clean_text(row.get("is_vulnerable", "1")) or "1",
+            }
+        )
+    return out
 
 
 def _decode_escaped_newlines(text: str) -> str:
@@ -1107,7 +1126,7 @@ def _write_participant_readme(
     llm_base_url: str,
     participant_os: str,
 ) -> None:
-    """Write short launch/troubleshooting instructions for participants."""
+    """Write the top-level README that ships inside each participant kit."""
     launcher_name = PARTICIPANT_OS_LAUNCHERS[participant_os]
     launcher_step = (
         f"1. On {PARTICIPANT_OS_LABELS[participant_os]}: double-click `{launcher_name}`."
@@ -1118,7 +1137,7 @@ def _write_participant_readme(
     if uses_local_ollama:
         setup_lines = "\n".join(
             [
-                "1. Make sure Python is installed on the machine that will run this kit. The kit uses it only to start the app and package the return ZIP.",
+                "1. Make sure Python is installed on the machine that will run this kit.",
                 "2. Install Ollama from [https://ollama.com/download](https://ollama.com/download).",
                 "3. Pull the assigned model once:",
                 f"   - `ollama pull {model_name}`",
@@ -1130,72 +1149,70 @@ def _write_participant_readme(
         troubleshooting_lines = "\n".join(
             [
                 "- If the app cannot reach the assistant, make sure `ollama serve` is still running.",
-                "- If the launcher says `py` or `python` is missing, install Python and run the launcher again.",
+                "- If the launcher says `py` or `python` is missing, install Python and try again.",
                 "- If the browser does not open automatically, use the localhost URL shown in the launcher window.",
-                "- If the app closes, reopen it from the same kit folder and continue there.",
+                "- If the app closes, reopen it from the same kit folder.",
             ]
         )
         runtime_lines = "\n".join(
             [
-                "- Use only the assistant built into this kit.",
-                f"- This kit is locked to `{model_name}`.",
-                "- A snippet may or may not contain a vulnerability. You can use the chat to inspect the code, ask questions, or change it.",
-                "- Larger pasted code blocks can take longer to answer. If a reply is slow, wait before retrying or send a smaller function/block.",
-                "- If a reply stalls, use **Stop / Discard Reply** and then send a narrower follow-up question.",
-                "- Do not edit the kit files or switch to another assistant unless the research team told you to do that.",
+                "- Use the assistant that comes with this kit.",
+                f"- The model is locked to `{model_name}`.",
+                "- Do not assume every snippet is vulnerable.",
+                "- Larger pasted code blocks can take longer to answer.",
+                "- If a reply stalls, use **Stop / Discard Reply** and send a smaller follow-up.",
+                "- Do not edit the kit files or switch to another assistant.",
             ]
         )
     else:
         setup_lines = "\n".join(
             [
-                "1. Make sure Python is installed on the machine that will run this kit. The kit uses it only to start the app and package the return ZIP.",
+                "1. Make sure Python is installed on the machine that will run this kit.",
                 "2. Make sure this machine can reach the assigned LLM endpoint before you begin.",
                 "3. If your network setup requires VPN access, connect before launching the kit.",
                 "4. You do not need to install a local model on this machine.",
-                "5. Leave the endpoint settings in the kit as they are.",
             ]
         )
         troubleshooting_lines = "\n".join(
             [
                 "- If the app cannot reach the assigned LLM endpoint, confirm that your network or VPN connection is active.",
-                "- If the launcher says `py` or `python` is missing, install Python and run the launcher again.",
+                "- If the launcher says `py` or `python` is missing, install Python and try again.",
                 "- If the browser does not open automatically, use the localhost URL shown in the launcher window.",
-                "- If the app closes, reopen it from the same kit folder and continue there.",
+                "- If the app closes, reopen it from the same kit folder.",
             ]
         )
         runtime_lines = "\n".join(
             [
-                "- Use only the assistant built into this kit.",
-                "- You do not need to choose a model or edit the endpoint yourself.",
-                "- A snippet may or may not contain a vulnerability. You can use the chat to inspect the code, ask questions, or change it.",
-                "- Larger pasted code blocks can take longer to answer. If a reply is slow, wait before retrying or send a smaller function/block.",
-                "- If a reply stalls, use **Stop / Discard Reply** and then send a narrower follow-up question.",
-                "- Do not edit the kit files or switch to another assistant unless the research team told you to do that.",
+                "- Use the assistant that comes with this kit.",
+                "- Do not change the model or endpoint.",
+                "- Do not assume every snippet is vulnerable.",
+                "- Larger pasted code blocks can take longer to answer.",
+                "- If a reply stalls, use **Stop / Discard Reply** and send a smaller follow-up.",
+                "- Do not edit the kit files or switch to another assistant.",
             ]
         )
     content = f"""# RepairAudit Participant Kit
 
-Use the launcher in this folder and do the rest of the work in the browser app. You should not need to open or edit any other files in the kit.
+Use the launcher in this folder. Do the rest in the browser app.
 
 ## 1) Before You Start
 {setup_lines}
 
 ## 2) Start The App
 {launcher_step}
-2. This kit only includes the launcher for the machine it was prepared for.
-3. Keep the command window or terminal open while you work.
-4. The browser app should open on its own. If it does not, copy the localhost URL shown in the launcher window into your browser.
-5. Use the onboarding window to complete the participant profile, then click **Begin Study**.
-6. The visible study timer starts only after you click **Begin Study**.
+2. Keep the command window or terminal open while you work.
+3. The browser app should open on its own. If it does not, copy the localhost URL shown in the launcher window into your browser.
+4. Complete the onboarding form, then click **Begin Study**.
+5. The visible timer starts after **Begin Study**.
 
 ## 3) In-App Assistant
 {runtime_lines}
 
 ## 4) Finish And Return
 1. Complete all assigned snippets in the app.
-2. Each snippet needs final submitted code, at least one in-app LLM turn, and the required summary fields before the kit will finish cleanly.
+2. Each snippet needs final submitted code, at least one in-app LLM turn, and the required summary fields.
 3. Use **Finish (Build ZIP)** when you are done.
-4. The kit writes the return ZIP into `exports/`.
+4. The return ZIP is written to `exports/` using your participant ID as the ZIP name.
 5. Send that ZIP back to the research team.
 
 ## 5) Troubleshooting
@@ -1451,12 +1468,12 @@ def main() -> None:
     }}
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-    zip_name = f"submission_{phase}_{participant_id}_{{ts}}.zip"
+    zip_name = "{participant_id}.zip"
     zip_path = EXPORTS / zip_name
     with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as zf:
         for p in sorted(RUN_DIR.rglob("*")):
             if p.is_file():
-                arc = str(Path("{participant_id}") / p.relative_to(RUN_DIR)).replace('\\\\', '/')
+                arc = str(p.relative_to(RUN_DIR)).replace('\\\\', '/')
                 zf.write(p, arcname=arc)
 
     print(f"Wrote: {{zip_path}}")
@@ -1600,6 +1617,7 @@ def build_participant_kit(args: argparse.Namespace) -> None:
                 "snippet_ids": snippet_ids,
                 "snippet_files": snippet_files,
                 "snippet_labels": snippet_labels,
+                "snippet_mappings": _study_assignment_rows(snippets),
             },
             indent=2,
         ),

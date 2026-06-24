@@ -1,4 +1,4 @@
-"""GUI for creating RepairAudit participant kits."""
+"""Tkinter GUI for participant kit generation."""
 
 from __future__ import annotations
 

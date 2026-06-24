@@ -1,8 +1,4 @@
-"""Unified CLI for the RepairAudit workflow.
-
-This module consolidates day-to-day command entrypoints so the team has one
-stable command surface instead of many tiny wrappers.
-"""
+"""Single CLI entrypoint for the RepairAudit workflow."""
 
 from __future__ import annotations
 
@@ -17,6 +13,18 @@ from pathlib import Path
 from typing import Any
 
 from tools.analysis.analyze_edits import analyze_participant
+from tools.analysis.judge_audit import (
+    DEFAULT_AUDIT_ROOT,
+    DEFAULT_CALIBRATION_CSV,
+    DEFAULT_FREEZE_PATH,
+    build_control_calibration_dataset,
+    run_judge_audit,
+)
+from tools.analysis.llm_judge import (
+    SUPPORTED_PARSER_MODES,
+    SUPPORTED_STRATEGIES,
+    SUPPORTED_VOTE_RULES,
+)
 from tools.analysis.interaction import (
     interaction_features,
     load_snippet_log_csv,
@@ -138,12 +146,35 @@ def _resolve_run_dir(run_dir: Path) -> Path:
     return run_dir
 
 
-def _load_run_snippet_files(run_dir: Path) -> dict[str, str]:
-    """Resolve original snippet IDs to participant-facing filenames for analysis and diff generation."""
+def _canonical_run_id(run_dir: Path) -> str:
+    """Return the participant-facing run identifier for direct and imported runs."""
+    resolved = _resolve_run_dir(run_dir)
+    if resolved.name.startswith("run_"):
+        return resolved.parent.name
+    return resolved.name
+
+
+def _load_assignment_payload(run_dir: Path) -> dict[str, Any]:
+    """Read the first usable assignment payload for one run."""
+    run_dir = _resolve_run_dir(run_dir)
+    study_assignment = run_dir / "study_assignment.json"
+    phase = run_dir.parent.name
+    participant_id = run_dir.name
+
+    if study_assignment.exists():
+        try:
+            payload = json.loads(study_assignment.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                phase = str(payload.get("phase") or phase).strip() or phase
+                participant_id = str(payload.get("participant_id") or participant_id).strip() or participant_id
+        except Exception:
+            pass
+
     candidate_paths = [run_dir / "researcher_assignment.json"]
-    map_name = f"{run_dir.parent.name}__{run_dir.name}.json"
-    candidate_paths.extend(sorted(REPO_ROOT.glob(f"**/_researcher_maps/{map_name}")))
-    candidate_paths.append(run_dir / "study_assignment.json")
+    map_names = {f"{run_dir.parent.name}__{run_dir.name}.json", f"{phase}__{participant_id}.json"}
+    for map_name in sorted(map_names):
+        candidate_paths.extend(sorted(REPO_ROOT.glob(f"**/_researcher_maps/{map_name}")))
+    candidate_paths.append(study_assignment)
 
     for candidate in candidate_paths:
         if not candidate.exists():
@@ -152,18 +183,21 @@ def _load_run_snippet_files(run_dir: Path) -> dict[str, str]:
             payload = json.loads(candidate.read_text(encoding="utf-8"))
         except Exception:
             continue
-        if not isinstance(payload, dict):
-            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
 
+
+def _load_run_snippet_files(run_dir: Path) -> dict[str, str]:
+    """Resolve original snippet IDs to participant-facing filenames for analysis and diff generation."""
+    payload = _load_assignment_payload(run_dir)
+    if payload:
         mapping: dict[str, str] = {}
         snippet_rows = payload.get("snippet_mappings", [])
         if isinstance(snippet_rows, list):
             for row in snippet_rows:
                 if not isinstance(row, dict):
                     continue
-                source_id = str(
-                    row.get("source_snippet_id") or row.get("snippet_id") or ""
-                ).strip()
                 file_name = Path(
                     str(
                         row.get("participant_filename")
@@ -171,8 +205,14 @@ def _load_run_snippet_files(run_dir: Path) -> dict[str, str]:
                         or ""
                     ).strip()
                 ).name
-                if source_id and file_name:
-                    mapping[source_id] = file_name
+                if not file_name:
+                    continue
+                for key in (
+                    str(row.get("snippet_id") or "").strip(),
+                    str(row.get("source_snippet_id") or "").strip(),
+                ):
+                    if key:
+                        mapping[key] = file_name
         if mapping:
             return mapping
 
@@ -299,13 +339,17 @@ def cmd_analyze_run(args: argparse.Namespace) -> None:
 
     analyze_participant(str(run_dir), str(metadata_csv))
 
-    rows = _load_metadata_rows(metadata_csv)
-    snippet_files = _load_run_snippet_files(run_dir)
     diff_stats: dict[str, dict[str, int]] = {}
-    for row in rows:
-        sid = row["snippet_id"]
-        baseline = Path(row["baseline_relpath"])
-        edited = _edited_path_for_item(edits_dir, row, snippet_files)
+    for row in _read_results_rows(run_dir):
+        sid = str(row.get("snippet_id") or "").strip()
+        baseline_rel = str(row.get("baseline_relpath") or "").strip()
+        edited_name = Path(str(row.get("edited_filename") or "").strip()).name
+        if not sid or not baseline_rel or not edited_name:
+            continue
+        baseline = Path(baseline_rel)
+        if not baseline.is_absolute():
+            baseline = REPO_ROOT / baseline
+        edited = edits_dir / edited_name
         outdiff = run_dir / "diffs" / f"{sid}.diff"
         if baseline.exists() and edited.exists():
             diff_stats[sid] = make_diff(str(baseline), str(edited), str(outdiff))
@@ -642,7 +686,7 @@ def cmd_aggregate_pilot(args: argparse.Namespace) -> None:
 
         rows.append(
             {
-                "run_id": run_dir.name,
+                "run_id": _canonical_run_id(run_dir),
                 "condition": condition,
                 "duration_seconds": duration,
                 "primary_source": primary_source,
@@ -756,6 +800,43 @@ def cmd_build_report(args: argparse.Namespace) -> None:
         title=args.title,
     )
     print(f"Wrote: {out_html}")
+
+
+def cmd_build_judge_calibration(args: argparse.Namespace) -> None:
+    """Build the researcher-side judge calibration CSV."""
+    summary = build_control_calibration_dataset(
+        metadata_csv=Path(args.metadata_csv),
+        out_csv=Path(args.out_csv),
+        manual_cases_csv=Path(args.manual_cases_csv) if args.manual_cases_csv else None,
+    )
+    print(f"Wrote: {summary['out_csv']}")
+    print(f"Calibration rows: {summary['rows']}")
+    print(f"Auto rows: {summary['auto_rows']}")
+    print(f"Manual rows: {summary['manual_rows']}")
+
+
+def cmd_judge_audit(args: argparse.Namespace) -> None:
+    """Run the judge calibration sweep."""
+    payload = run_judge_audit(
+        calibration_csv=Path(args.calibration_csv),
+        out_root=Path(args.out_root),
+        strategies=list(args.strategies),
+        parser_modes=list(args.parser_modes),
+        vote_rules=list(args.vote_rules),
+        config_path=(args.config_path or None),
+        write_global_freeze=bool(args.write_global_freeze),
+        global_freeze_path=Path(args.freeze_out) if args.freeze_out else None,
+    )
+    print(f"Audit dir: {payload['audit_dir']}")
+    print(f"Results CSV: {payload['results_csv']}")
+    print(f"Config metrics: {payload['config_metrics_csv']}")
+    print(f"Strategy diagnostics: {payload['strategy_diagnostics_csv']}")
+    print(f"Summary JSON: {payload['summary_json']}")
+    print(f"Summary TXT: {payload['summary_txt']}")
+    print(f"Local freeze JSON: {payload['local_freeze_json']}")
+    if payload.get("global_freeze_json"):
+        print(f"Global freeze JSON: {payload['global_freeze_json']}")
+    print(f"Recommended config: {payload['recommended_config_id']}")
 
 
 def cmd_aggregate_results(args: argparse.Namespace) -> None:
@@ -1068,6 +1149,44 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("--title", default="RepairAudit Report")
     p_report.set_defaults(func=cmd_build_report)
 
+    p_cal = sub.add_parser(
+        "build-judge-calibration",
+        help="Build the researcher-only calibration CSV used for judge auditing.",
+    )
+    p_cal.add_argument("--metadata_csv", default=str(DEFAULT_METADATA_PATH))
+    p_cal.add_argument("--out_csv", default=str(DEFAULT_CALIBRATION_CSV))
+    p_cal.add_argument("--manual_cases_csv", default="")
+    p_cal.set_defaults(func=cmd_build_judge_calibration)
+
+    p_audit = sub.add_parser(
+        "judge-audit",
+        help="Run the judge calibration sweep for the LLM judge.",
+    )
+    p_audit.add_argument("--calibration_csv", default=str(DEFAULT_CALIBRATION_CSV))
+    p_audit.add_argument("--out_root", default=str(DEFAULT_AUDIT_ROOT))
+    p_audit.add_argument("--config_path", default="")
+    p_audit.add_argument(
+        "--strategies",
+        nargs="+",
+        default=list(SUPPORTED_STRATEGIES),
+        choices=list(SUPPORTED_STRATEGIES),
+    )
+    p_audit.add_argument(
+        "--parser_modes",
+        nargs="+",
+        default=list(SUPPORTED_PARSER_MODES),
+        choices=list(SUPPORTED_PARSER_MODES),
+    )
+    p_audit.add_argument(
+        "--vote_rules",
+        nargs="+",
+        default=list(SUPPORTED_VOTE_RULES),
+        choices=list(SUPPORTED_VOTE_RULES),
+    )
+    p_audit.add_argument("--write_global_freeze", action="store_true")
+    p_audit.add_argument("--freeze_out", default=str(DEFAULT_FREEZE_PATH))
+    p_audit.set_defaults(func=cmd_judge_audit)
+
     p_rebuild = sub.add_parser("aggregate-results", help="Rebuild run summary files from results.csv.")
     p_rebuild.add_argument("--run_dir", required=True)
     p_rebuild.set_defaults(func=cmd_aggregate_results)
@@ -1136,7 +1255,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_kit.add_argument(
         "--llm_base_url",
         default="http://127.0.0.1:11434",
-        help="Base URL for the participant-side LLM endpoint (default: local Ollama).",
+        help="Base URL for the participant-side LLM endpoint.",
     )
     p_kit.add_argument("--temperature", type=float, default=0.2)
     p_kit.add_argument("--top_p", type=float, default=0.9)

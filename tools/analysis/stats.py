@@ -1,8 +1,4 @@
-"""Statistical summary utilities used by the research analysis pipeline.
-
-The current study mode is security-only, so this module reports descriptive
-statistics and does not run between-condition significance tests.
-"""
+"""Aggregate summary statistics for the security-only study flow."""
 
 from __future__ import annotations
 
@@ -111,11 +107,13 @@ def compute_pilot_summary_lines(in_csv: str) -> list[str]:
         ("primary_persistence_rate", "Persistence rate (LLM judge)"),
         ("primary_abstention_rate", "Abstention rate (LLM judge)"),
     ]
-    secondary_metrics = [
+    detector_metrics = [
         ("mitigation_rate_detector", "Mitigation rate (detector)"),
         ("persistence_rate_detector", "Persistence rate (detector)"),
         ("amplification_rate_detector", "Amplification rate (detector)"),
         ("judge_detector_disagreement_rate", "Judge-detector disagreement rate"),
+    ]
+    workflow_metrics = [
         ("mitigations_per_minute", "Mitigations per minute"),
         ("time_to_first_secure_fix_seconds", "Time to first secure fix (s)"),
         ("judge_strategy_variance", "Judge strategy variance (entropy)"),
@@ -126,7 +124,7 @@ def compute_pilot_summary_lines(in_csv: str) -> list[str]:
         df["condition"] = df["condition"].astype(str).str.strip().str.lower()
         df = df[df["condition"].isin(VALID_CONDITIONS)].copy()
 
-    for col, _ in (base_metrics + secondary_metrics):
+    for col, _ in (base_metrics + detector_metrics + workflow_metrics):
         if col in df.columns:
             df[col] = df[col].apply(_safe_float_for_summary)
 
@@ -147,7 +145,21 @@ def compute_pilot_summary_lines(in_csv: str) -> list[str]:
     lines.append("")
 
     lines.append("Secondary (diagnostics):")
-    for col, label in secondary_metrics:
+    detector_rows_scored = 0
+    if "scored_snippets" in df.columns:
+        scored_series = pd.to_numeric(df["scored_snippets"], errors="coerce").fillna(0.0)
+        detector_rows_scored = int(scored_series.sum())
+
+    if detector_rows_scored > 0:
+        for col, label in detector_metrics:
+            if col not in df.columns:
+                continue
+            described = _describe_series_for_summary(df[col])
+            lines.append(f"- {label}: {described['mean']:.3f} +/- {described['std']:.3f} (n={described['n']})")
+    else:
+        lines.append("- Detector diagnostics: not enabled or no detector-supported rows were analyzed.")
+
+    for col, label in workflow_metrics:
         if col not in df.columns:
             continue
         described = _describe_series_for_summary(df[col])

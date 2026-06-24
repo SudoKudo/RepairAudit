@@ -270,6 +270,7 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                 baseline_files = sorted((run_dir / "baseline").iterdir())
                 edit_files = sorted((run_dir / "edits").iterdir())
                 participant_readme = (out_root / "P777" / "README.md").read_text(encoding="utf-8")
+                packager_text = (support_dir / "package_submission.py").read_text(encoding="utf-8")
                 self.assertTrue(support_dir.exists())
                 self.assertTrue((support_dir / "participant_web_app.py").exists())
                 self.assertTrue((support_dir / "study_config.lock.json").exists())
@@ -281,7 +282,11 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                 self.assertTrue((out_root / "P777" / "Launch_Study_Web_App.bat").exists())
                 self.assertFalse((out_root / "P777" / "Launch_Study_Web_App.sh").exists())
                 self.assertIn("Launch_Study_Web_App.bat", participant_readme)
+                self.assertIn("participant ID as the ZIP name", participant_readme)
                 self.assertNotIn("Launch_Study_Web_App.sh", participant_readme)
+                self.assertIn('zip_name = "P777.zip"', packager_text)
+                self.assertIn("arc = str(p.relative_to(RUN_DIR)).replace", packager_text)
+                self.assertNotIn('Path("P777") / p.relative_to(RUN_DIR)', packager_text)
                 share_zip = out_root / "_share_zips" / "participant_kit_pilot_P777.zip"
                 self.assertTrue(share_zip.exists())
                 with ZipFile(share_zip, "r") as zf:

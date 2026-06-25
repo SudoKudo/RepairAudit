@@ -1438,7 +1438,7 @@ function formatFlatCStyleCode(text){
       continue;
     }
 
-    if(ch === "\"" || ch === "'"){
+    if(ch === '"' || ch === "'"){
       inString = ch;
       index += 1;
       continue;
@@ -1561,7 +1561,7 @@ function splitFlatPythonSegments(text){
       continue;
     }
 
-    if(ch === "\"" || ch === "'"){
+    if(ch === '"' || ch === "'"){
       inString = ch;
       index += 1;
       continue;
@@ -2702,6 +2702,7 @@ class AppHandler(BaseHTTPRequestHandler):
     client_seen: bool = False
     heartbeat_seen: bool = False
     close_requested_at: float | None = None
+    last_client_poll_at: float | None = None
     cancelled_chat_request_ids: set[str] = set()
     cancelled_chat_lock = threading.Lock()
     quiet_paths = {"/api/ping", "/api/heartbeat", "/api/save_snippet"}
@@ -2739,6 +2740,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 pass
 
         threading.Thread(target=_stop, daemon=True).start()
+
+    @classmethod
+    def touch_client_poll(cls) -> None:
+        """Record the latest browser poll so idle windows can be cleaned up."""
+        cls.last_client_poll_at = time.monotonic()
 
     def _post_security_ok(self) -> tuple[bool, str]:
         """Require same-origin + CSRF token for state-changing requests."""
@@ -3085,6 +3091,7 @@ class AppHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/state":
             # Mark active browser session once state is requested.
             AppHandler.client_seen = True
+            AppHandler.touch_client_poll()
             self.store.mark_onboarding_presented()
             ids = self.store.get_snippet_ids()
             readme_text = self.store.readme_path.read_text(encoding="utf-8", errors="replace")
@@ -3110,6 +3117,7 @@ class AppHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/ping":
             AppHandler.client_seen = True
+            AppHandler.touch_client_poll()
             self._json({"ok": True, "timer": self.store.timer_status()})
             return
 
@@ -3149,6 +3157,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/chat_history":
+            AppHandler.touch_client_poll()
             qs = parse_qs(parsed.query)
             snippet_id = (qs.get("snippet_id", [""])[0] or "").strip()
             if not snippet_id:
@@ -3167,6 +3176,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/snippet":
+            AppHandler.touch_client_poll()
             qs = parse_qs(parsed.query)
             snippet_id = (qs.get("snippet_id", [""])[0] or "").strip()
             if not snippet_id:
@@ -3225,10 +3235,12 @@ class AppHandler(BaseHTTPRequestHandler):
                 timer = self.store.begin_study()
                 AppHandler.client_seen = True
                 AppHandler.heartbeat_seen = True
+                AppHandler.touch_client_poll()
                 self._json({"ok": True, "timer": timer})
                 return
 
             if parsed.path == "/api/save_snippet":
+                AppHandler.touch_client_poll()
                 if not self.store.study_started():
                     self._json({"error": "Review onboarding and click Begin Study before editing snippets."}, status=HTTPStatus.BAD_REQUEST)
                     return
@@ -3245,6 +3257,7 @@ class AppHandler(BaseHTTPRequestHandler):
 
             if parsed.path == "/api/heartbeat":
                 AppHandler.client_seen = True
+                AppHandler.touch_client_poll()
                 if self.store.study_started():
                     AppHandler.heartbeat_seen = True
                     self.store.heartbeat()
@@ -3252,16 +3265,19 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
 
             if parsed.path == "/api/client_meta":
+                AppHandler.touch_client_poll()
                 self.store.write_client_meta(body)
                 self._json({"ok": True})
                 return
 
             if parsed.path == "/api/save_profile":
+                AppHandler.touch_client_poll()
                 profile = self.store.write_participant_profile(body)
                 self._json({"ok": True, "participant_profile": profile})
                 return
 
             if parsed.path == "/api/cancel_chat":
+                AppHandler.touch_client_poll()
                 request_id = str(body.get("request_id", "") or "").strip()
                 if not request_id:
                     self._json({"error": "request_id is required"}, status=HTTPStatus.BAD_REQUEST)
@@ -3271,6 +3287,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
 
             if parsed.path == "/api/add_turn":
+                AppHandler.touch_client_poll()
                 if not self.store.study_started():
                     self._json({"error": "Review onboarding and click Begin Study before logging chat turns."}, status=HTTPStatus.BAD_REQUEST)
                     return
@@ -3293,6 +3310,7 @@ class AppHandler(BaseHTTPRequestHandler):
 
 
             if parsed.path == "/api/ollama_chat":
+                AppHandler.touch_client_poll()
                 if not self.store.study_started():
                     self._json({"error": "Review onboarding and click Begin Study before using the in-app LLM chat."}, status=HTTPStatus.BAD_REQUEST)
                     return
@@ -3412,6 +3430,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
 
             if parsed.path == "/api/preflight":
+                AppHandler.touch_client_poll()
                 if not self.store.study_started():
                     self._json({"ok": False, "issues": ["Review onboarding and click Begin Study before finishing the study."]})
                     return
@@ -3423,6 +3442,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
 
             if parsed.path == "/api/build_zip":
+                AppHandler.touch_client_poll()
                 if not self.store.study_started():
                     self._json({"ok": False, "message": "Review onboarding and click Begin Study before finishing the study."}, status=HTTPStatus.BAD_REQUEST)
                     return
@@ -3480,6 +3500,7 @@ def run_server() -> None:
     AppHandler.client_seen = False
     AppHandler.heartbeat_seen = False
     AppHandler.close_requested_at = None
+    AppHandler.last_client_poll_at = None
 
     # Pick first available localhost port so stale older servers do not block start.
     server: ThreadingHTTPServer | None = None
@@ -3544,6 +3565,19 @@ def run_server() -> None:
             close_requested_at = AppHandler.close_requested_at
             if close_requested_at is not None and (time.monotonic() - close_requested_at) > 5.0:
                 print("[server] Browser window closed. Closing participant app server.")
+                AppHandler.shutdown_now = True
+                try:
+                    store.mark_end()
+                except Exception:
+                    pass
+                try:
+                    server.shutdown()
+                except Exception:
+                    pass
+                return
+            last_poll = AppHandler.last_client_poll_at
+            if AppHandler.client_seen and last_poll is not None and (time.monotonic() - last_poll) > 20.0:
+                print("[server] Browser became idle or disconnected. Closing participant app server.")
                 AppHandler.shutdown_now = True
                 try:
                     store.mark_end()

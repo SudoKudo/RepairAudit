@@ -77,3 +77,6 @@ tools/domain_classification/dataset.csv
 /data/datasets/classified/dataset_participant_ready.csv
 /data/datasets/classified/dataset_participant_rejected.csv
 /data/datasets/classified/*.log
+
+#env files
+.env

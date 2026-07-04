@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib import error, request
+from urllib.parse import urlsplit, urlunsplit
 
 try:
     import yaml  # type: ignore
@@ -257,6 +258,70 @@ def _load_effective_config(
         "generated_at": str(frozen_payload.get("generated_at", "") or "").strip(),
     }
     return merged
+
+
+def get_judge_runtime_settings(
+    config_path: Optional[str | Path] = None,
+    *,
+    use_frozen_config: Optional[bool] = None,
+    model: Optional[str] = None,
+    ollama_url: Optional[str] = None,
+    timeout_s: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Resolve the effective runtime settings for one judge invocation."""
+    cfg = _load_effective_config(config_path, use_frozen_config=use_frozen_config)
+    llm_cfg = _deep_get(cfg, ["llm_judge"], {}) or {}
+
+    default_model = str(llm_cfg.get("model", "qwen2.5-coder:7b-instruct"))
+    default_url = str(llm_cfg.get("ollama_url", "http://localhost:11434/api/generate"))
+    default_timeout = _coerce_float(llm_cfg.get("timeout_seconds", 90), 90.0)
+
+    return {
+        "config": cfg,
+        "llm_cfg": llm_cfg,
+        "enabled": bool(llm_cfg.get("enabled", False)),
+        "model": (model or os.getenv("GLACIER_JUDGE_MODEL", "").strip() or default_model).strip(),
+        "ollama_url": (ollama_url or os.getenv("GLACIER_OLLAMA_URL", "").strip() or default_url).strip(),
+        "timeout_seconds": float(timeout_s if timeout_s is not None else default_timeout),
+    }
+
+
+def _judge_healthcheck_url(ollama_url: str) -> str:
+    """Map a generate endpoint to a cheap Ollama health probe URL."""
+    parts = urlsplit((ollama_url or "").strip())
+    path = "/api/tags"
+    return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+
+
+def probe_judge_endpoint(
+    config_path: Optional[str | Path] = None,
+    *,
+    use_frozen_config: Optional[bool] = None,
+    ollama_url: Optional[str] = None,
+    timeout_s: float = 5.0,
+) -> tuple[bool, str]:
+    """Return whether the configured Ollama-compatible endpoint is reachable."""
+    settings = get_judge_runtime_settings(
+        config_path=config_path,
+        use_frozen_config=use_frozen_config,
+        ollama_url=ollama_url,
+        timeout_s=timeout_s,
+    )
+    health_url = _judge_healthcheck_url(str(settings.get("ollama_url", "") or ""))
+    if not health_url:
+        return False, "No LLM judge URL is configured."
+
+    req = request.Request(health_url, method="GET")
+    try:
+        with request.urlopen(req, timeout=float(timeout_s)) as resp:
+            status = int(getattr(resp, "status", 200) or 200)
+        return True, f"Health probe succeeded at {health_url} (HTTP {status})."
+    except error.HTTPError as exc:
+        if exc.code in {401, 403, 404, 405}:
+            return True, f"Endpoint responded at {health_url} (HTTP {exc.code})."
+        return False, f"Endpoint probe failed at {health_url} (HTTP {exc.code})."
+    except error.URLError as exc:
+        return False, f"Could not reach {health_url}: {exc.reason or exc}"
 
 
 def _post_json(url: str, payload: Dict[str, Any], timeout: float = 90.0) -> Dict[str, Any]:
@@ -793,16 +858,18 @@ def judge_edited_code_with_ollama(
     use_frozen_config: Optional[bool] = None,
 ) -> JudgeResult:
     """Run the LLM judge for one edited snippet."""
-    cfg = _load_effective_config(config_path, use_frozen_config=use_frozen_config)
-    llm_cfg = _deep_get(cfg, ["llm_judge"], {}) or {}
-
-    default_model = str(llm_cfg.get("model", "qwen2.5-coder:7b-instruct"))
-    default_url = str(llm_cfg.get("ollama_url", "http://localhost:11434/api/generate"))
-    default_timeout = _coerce_float(llm_cfg.get("timeout_seconds", 90), 90.0)
-
-    model_final = (model or os.getenv("GLACIER_JUDGE_MODEL", "").strip() or default_model).strip()
-    url_final = (ollama_url or os.getenv("GLACIER_OLLAMA_URL", "").strip() or default_url).strip()
-    timeout_final = float(timeout_s if timeout_s is not None else default_timeout)
+    runtime = get_judge_runtime_settings(
+        config_path=config_path,
+        use_frozen_config=use_frozen_config,
+        model=model,
+        ollama_url=ollama_url,
+        timeout_s=timeout_s,
+    )
+    cfg = runtime["config"]
+    llm_cfg = runtime["llm_cfg"]
+    model_final = str(runtime["model"] or "").strip()
+    url_final = str(runtime["ollama_url"] or "").strip()
+    timeout_final = float(runtime["timeout_seconds"])
 
     defaults: Dict[str, Any] = {"temperature": 0.0, "top_p": 0.1, "num_predict": 350}
     options_from_cfg: Dict[str, Any] = {}

@@ -24,6 +24,8 @@ from tools.analysis.llm_judge import (
     SUPPORTED_PARSER_MODES,
     SUPPORTED_STRATEGIES,
     SUPPORTED_VOTE_RULES,
+    get_judge_runtime_settings,
+    probe_judge_endpoint,
 )
 from tools.analysis.interaction import (
     interaction_features,
@@ -146,12 +148,61 @@ def _resolve_run_dir(run_dir: Path) -> Path:
     return run_dir
 
 
+def _find_phase_participant_run_dir(phase: str, participant_id: str) -> Path:
+    """Find a run by participant ID under one phase, including imported submission folders."""
+    phase_root = Path("runs") / phase
+    direct = phase_root / participant_id
+    if direct.exists():
+        return direct
+    if not phase_root.exists():
+        return direct
+
+    nested_candidates = []
+    for candidate_root in sorted([p for p in phase_root.iterdir() if p.is_dir()]):
+        nested = candidate_root / participant_id
+        if nested.exists():
+            nested_candidates.append(nested)
+
+    if not nested_candidates:
+        return direct
+
+    nested_candidates.sort(key=lambda path: path.parent.name, reverse=True)
+    return nested_candidates[0]
+
+
 def _canonical_run_id(run_dir: Path) -> str:
     """Return the participant-facing run identifier for direct and imported runs."""
     resolved = _resolve_run_dir(run_dir)
     if resolved.name.startswith("run_"):
         return resolved.parent.name
     return resolved.name
+
+
+def _ensure_judge_endpoint_ready(
+    *,
+    config_path: str | Path | None = None,
+    use_frozen_config: bool | None = None,
+) -> None:
+    """Fail fast when judge-backed commands are pointed at an unavailable endpoint."""
+    runtime = get_judge_runtime_settings(config_path=config_path, use_frozen_config=use_frozen_config)
+    if not bool(runtime.get("enabled", False)):
+        return
+
+    ok, message = probe_judge_endpoint(
+        config_path=config_path,
+        use_frozen_config=use_frozen_config,
+        timeout_s=min(5.0, float(runtime.get("timeout_seconds", 90.0) or 90.0)),
+    )
+    if ok:
+        return
+
+    target = str(runtime.get("ollama_url", "") or "").strip() or "<unset>"
+    raise RuntimeError(
+        "LLM judge endpoint is unavailable. "
+        f"Configured URL: {target}. "
+        f"{message} "
+        "Update config.yaml or set GLACIER_OLLAMA_URL before running judge-backed commands."
+    )
 
 
 def _load_assignment_payload(run_dir: Path) -> dict[str, Any]:
@@ -318,7 +369,7 @@ def cmd_start_run(args: argparse.Namespace) -> None:
 
 def cmd_analyze_run(args: argparse.Namespace) -> None:
     """Analyze one participant run and emit all per-run analysis outputs."""
-    requested_run_dir = Path("runs") / args.phase / args.participant_id
+    requested_run_dir = _find_phase_participant_run_dir(args.phase, args.participant_id)
     if not requested_run_dir.exists():
         raise FileNotFoundError(f"Run dir not found: {requested_run_dir}")
 
@@ -337,6 +388,7 @@ def cmd_analyze_run(args: argparse.Namespace) -> None:
     if not metadata_csv.exists():
         raise FileNotFoundError(f"Missing metadata CSV: {metadata_csv}")
 
+    _ensure_judge_endpoint_ready()
     analyze_participant(str(run_dir), str(metadata_csv))
 
     diff_stats: dict[str, dict[str, int]] = {}
@@ -817,6 +869,7 @@ def cmd_build_judge_calibration(args: argparse.Namespace) -> None:
 
 def cmd_judge_audit(args: argparse.Namespace) -> None:
     """Run the judge calibration sweep."""
+    _ensure_judge_endpoint_ready(config_path=(args.config_path or None), use_frozen_config=False)
     payload = run_judge_audit(
         calibration_csv=Path(args.calibration_csv),
         out_root=Path(args.out_root),

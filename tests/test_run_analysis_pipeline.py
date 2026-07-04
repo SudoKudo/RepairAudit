@@ -24,6 +24,20 @@ def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
 
 
 class RunAnalysisPipelineTests(unittest.TestCase):
+    def test_find_phase_participant_run_dir_prefers_nested_imported_submission(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            runs_root = tmp_path / "runs" / "pilot"
+            nested_old = runs_root / "submission_pilot_M001_20260622T195510Z" / "M001"
+            nested_new = runs_root / "submission_pilot_M001_20260623T195510Z" / "M001"
+            nested_old.mkdir(parents=True)
+            nested_new.mkdir(parents=True)
+
+            with patch.object(study_cli, "Path", side_effect=lambda *parts: Path(tmp_path, *parts)):
+                resolved = study_cli._find_phase_participant_run_dir("pilot", "M001")
+
+            self.assertEqual(resolved, nested_new)
+
     def test_analyze_participant_prefers_run_assignment_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)

@@ -963,7 +963,16 @@ body{margin:0;min-height:100vh;background:linear-gradient(180deg,#f9fbff 0%,#eff
 .readme{max-height:220px;overflow:auto;white-space:pre-wrap;font-size:13px;color:#334f76;border:1px solid #e1ebff;border-radius:10px;padding:9px;background:#fbfdff}
 textarea,input{width:100%;border:1px solid #ccddff;border-radius:10px;padding:8px 10px;background:#fff;color:var(--text)}
 textarea{font-family:Consolas,monospace;font-size:13px;min-height:220px;line-height:1.5;tab-size:4}
-#baseline_code{background:#f8fbff;min-height:170px}
+#baseline_code{border:1px solid #ccddff;border-radius:10px;background:#f8fbff;min-height:170px;max-height:360px;overflow:auto;font-family:Consolas,monospace;font-size:13px;line-height:1.5;tab-size:4}
+#baseline_code.expanded{min-height:520px;height:70vh;max-height:none}
+.baselineempty{padding:10px 12px;color:#5c6f8b}
+.baselineLine{display:grid;grid-template-columns:56px minmax(0,1fr);align-items:stretch;border-bottom:1px solid #edf3ff;cursor:pointer}
+.baselineLine:last-child{border-bottom:none}
+.baselineLine:hover{background:#eef5ff}
+.baselineLine.anchor{background:#edf4ff}
+.baselineLine.marked{background:#dfeeff}
+.baselineNum{padding:0 10px;color:#6a7f9e;text-align:right;border-right:1px solid #e1ebff;user-select:none}
+.baselineText{padding:0 12px;white-space:pre;overflow-x:auto}
 #chat_prompt{min-height:105px}
 .hint{font-size:12px;color:#496584}
 /* Match dropdown styling with the rest of the UI. */
@@ -981,8 +990,12 @@ select:focus{
   border-color:#82adff;
   box-shadow:0 0 0 3px rgba(45,121,255,0.18);
 }
-.chatlog{margin-top:8px;min-height:220px;max-height:420px;overflow:auto;border:1px solid #d8e6ff;border-radius:10px;padding:9px;background:#fbfdff}
-.chatlog.expanded{max-height:680px}
+.chatlog{margin-top:8px;border:1px solid #d8e6ff;border-radius:10px;padding:9px;background:#fbfdff}
+.chatlog.expanded .chatdetail{max-height:680px}
+.chatindex{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.chatindexbtn{border:1px solid #ccddff;background:#ffffff;color:#214c8e;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer}
+.chatindexbtn.active{border-color:#7fb0ff;background:#eaf2ff}
+.chatdetail{min-height:220px;max-height:420px;overflow:auto}
 .chatrow{margin:0 0 8px 0;padding:8px 10px;border-radius:9px;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.45}
 .chatrow.user{background:#eaf2ff;border:1px solid #c9dcff}
 .chatrow.assistant{background:#eef8f1;border:1px solid #cde7d2}
@@ -1033,10 +1046,16 @@ select:focus{
 
       <div class="sp" style="margin:8px 0 4px 0">
         <div class="lbl" title="Original vulnerable code for this snippet.">Baseline (read-only)</div>
-        <button class="btn alt tiny" id="copyBaselineBtn" title="Copy baseline code to clipboard.">Copy Baseline</button>
+        <div class="row">
+          <button class="btn alt tiny" id="toggleBaselineSizeBtn" type="button" title="Expand or collapse the baseline code pane.">Expand Baseline</button>
+          <button class="btn alt tiny" id="copyBaselineBtn" title="Copy baseline code to clipboard.">Copy Baseline</button>
+          <button class="btn alt tiny" id="copyMarkedBaselineBtn" type="button" title="Copy only the marked baseline line or line range.">Copy Marked Lines</button>
+          <button class="btn alt tiny" id="clearBaselineSelectionBtn" type="button" title="Clear the current baseline line marks.">Clear Marks</button>
+        </div>
       </div>
       <div class="lbl" id="baselineMeta" style="margin:0 0 4px 0" title="Language and file name for this baseline snippet."></div>
-      <textarea id="baseline_code" readonly wrap="off" spellcheck="false" title="Baseline snippet is read-only. Use it as your reference."></textarea>
+      <div id="baseline_code" title="Baseline snippet is read-only. Click one line, then another line, to mark a range."></div>
+      <div class="lbl" id="baselineSelectionNote" style="margin:6px 0 0 0">Click one line, then another line, to mark a range. Use Copy Marked Lines when you only need part of the file.</div>
       <div class="lbl" style="margin:10px 0 4px 0" title="Paste and refine the final code you want to submit for this snippet.">Final Submitted Code</div>
       <textarea id="edited_code" wrap="off" spellcheck="false" title="Paste the final code here, then edit it until it matches what you want to submit."></textarea>
 
@@ -1049,7 +1068,10 @@ select:focus{
         </div>
       </div>
       <div class="lbl" id="ollamaStatus" style="margin-top:6px" title="Connection/model status for the assigned LLM endpoint.">Checking assigned LLM connection...</div>
-      <div class="chatlog" id="chatHistory" title="Chat history for the currently selected snippet."></div>
+      <div class="chatlog" id="chatHistory" title="Chat history for the currently selected snippet.">
+        <div class="chatindex" id="chatHistoryIndex" title="Select a numbered prompt/reply exchange to inspect."></div>
+        <div class="chatdetail" id="chatHistoryDetail" title="Prompt and reply text for the selected exchange."></div>
+      </div>
       <div class="full" style="margin-top:8px">
         <label class="lbl" title="Enter one prompt for the assigned LLM about the current snippet.">Chat Prompt</label>
         <div class="hint" style="margin-bottom:6px">Larger inputs can take longer to answer. If a reply is slow, wait before retrying or send a smaller function or block.</div>
@@ -1128,6 +1150,12 @@ var backendConnected = true;
 var timerFrozenSeconds = 0;
 var activeChatXhr = null;
 var activeChatRequestId = "";
+var baselineExpanded = false;
+var chatExchangesBySnippet = {};
+var chatExchangeSelection = {};
+var baselineTextBySnippet = {};
+var baselineSelectionBySnippet = {};
+var baselineAnchorLineBySnippet = {};
 
 // Compatibility fallback for environments that do not provide Number.isFinite.
 if(typeof Number.isFinite !== "function"){
@@ -1802,6 +1830,7 @@ function buildInAppGuide(data){
     "Quick Reference",
     "- Use the Onboarding button any time you need to reopen the instructions or participant profile.",
     "- The Baseline pane is reference-only. Only Final Submitted Code is exported.",
+    "- Click one baseline line, then another, to mark a range. Use Copy Marked Lines when you only want part of the file.",
     "- Each snippet may or may not be vulnerable. Use the chat however you normally would to inspect or discuss it.",
     "- If a snippet is long, send only the relevant function or block instead of the whole file.",
     "- Save each snippet summary and final code before moving to the next one. When everything is done, click Finish (Build ZIP).",
@@ -1844,6 +1873,164 @@ function setChatTurnBadge(turns){
   }
 }
 
+function baselineLinesForText(text){
+  var lines = String(text || "").replace(/\\r\\n?/g, "\\n").split("\\n");
+  if(lines.length > 1 && lines[lines.length - 1] === ""){
+    lines.pop();
+  }
+  return lines;
+}
+
+function updateBaselineSelectionNote(){
+  var note = byId("baselineSelectionNote");
+  if(!note){
+    return;
+  }
+  var selection = baselineSelectionBySnippet[currentSid];
+  var anchor = baselineAnchorLineBySnippet[currentSid];
+  if(selection && Number.isFinite(selection.start) && Number.isFinite(selection.end)){
+    if(selection.start === selection.end){
+      note.textContent = "Marked line " + selection.start + ". Use Copy Marked Lines or click another line to start over.";
+    } else {
+      note.textContent = "Marked lines " + selection.start + "-" + selection.end + ". Use Copy Marked Lines when you only need that range.";
+    }
+    return;
+  }
+  if(Number.isFinite(anchor) && anchor > 0){
+    note.textContent = "Start line set to " + anchor + ". Click another line to finish the range.";
+    return;
+  }
+  note.textContent = "Click one line, then another line, to mark a range. Use Copy Marked Lines when you only need part of the file.";
+}
+
+function renderBaselineViewer(text, sid){
+  var box = byId("baseline_code");
+  baselineTextBySnippet[sid] = String(text || "");
+  if(!box){
+    return;
+  }
+  box.innerHTML = "";
+  var lines = baselineLinesForText(text);
+  if(!lines.length){
+    box.innerHTML = "<div class='baselineempty'>No baseline code available for this snippet.</div>";
+    updateBaselineSelectionNote();
+    return;
+  }
+  var selection = baselineSelectionBySnippet[sid];
+  var anchor = baselineAnchorLineBySnippet[sid];
+  for(var i = 0; i < lines.length; i++){
+    var lineNumber = i + 1;
+    var row = document.createElement("div");
+    var marked = false;
+    if(selection && Number.isFinite(selection.start) && Number.isFinite(selection.end)){
+      marked = lineNumber >= selection.start && lineNumber <= selection.end;
+    } else if(Number.isFinite(anchor) && anchor === lineNumber){
+      marked = true;
+      row.className = "baselineLine anchor";
+    }
+    if(!row.className){
+      row.className = "baselineLine" + (marked ? " marked" : "");
+    } else if(marked){
+      row.className += " marked";
+    }
+    row.title = "Click to mark this line or a line range for copying.";
+    row.onclick = (function(targetLine){
+      return function(){
+        toggleBaselineLineSelection(targetLine);
+      };
+    })(lineNumber);
+
+    var numberCell = document.createElement("div");
+    numberCell.className = "baselineNum";
+    numberCell.textContent = lineNumber;
+    var textCell = document.createElement("div");
+    textCell.className = "baselineText";
+    textCell.textContent = lines[i] === "" ? " " : lines[i];
+
+    row.appendChild(numberCell);
+    row.appendChild(textCell);
+    box.appendChild(row);
+  }
+  updateBaselineSelectionNote();
+}
+
+function toggleBaselineLineSelection(lineNumber){
+  if(!currentSid || !Number.isFinite(lineNumber) || lineNumber < 1){
+    return;
+  }
+  var existing = baselineSelectionBySnippet[currentSid];
+  var anchor = baselineAnchorLineBySnippet[currentSid];
+  if(existing && Number.isFinite(existing.start) && Number.isFinite(existing.end)){
+    delete baselineSelectionBySnippet[currentSid];
+    baselineAnchorLineBySnippet[currentSid] = lineNumber;
+  } else if(Number.isFinite(anchor) && anchor > 0){
+    baselineSelectionBySnippet[currentSid] = {
+      start: Math.min(anchor, lineNumber),
+      end: Math.max(anchor, lineNumber)
+    };
+    delete baselineAnchorLineBySnippet[currentSid];
+  } else {
+    baselineAnchorLineBySnippet[currentSid] = lineNumber;
+  }
+  renderBaselineViewer(baselineTextBySnippet[currentSid] || "", currentSid);
+}
+
+function clearBaselineSelection(){
+  if(!currentSid){
+    return;
+  }
+  delete baselineSelectionBySnippet[currentSid];
+  delete baselineAnchorLineBySnippet[currentSid];
+  renderBaselineViewer(baselineTextBySnippet[currentSid] || "", currentSid);
+}
+
+function copyTextToClipboard(text, okMessage, errMessage){
+  if(!text){
+    setMsg(errMessage, false);
+    return;
+  }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(function(){
+      setMsg(okMessage, true);
+    }, function(){
+      setMsg(errMessage, false);
+    });
+    return;
+  }
+  var helper = document.createElement("textarea");
+  helper.value = text;
+  helper.setAttribute("readonly", "readonly");
+  helper.style.position = "absolute";
+  helper.style.left = "-9999px";
+  document.body.appendChild(helper);
+  try{
+    helper.focus();
+    helper.select();
+    var ok = document.execCommand && document.execCommand("copy");
+    setMsg(ok ? okMessage : errMessage, !!ok);
+  } catch(_err){
+    setMsg(errMessage, false);
+  } finally {
+    document.body.removeChild(helper);
+  }
+}
+
+function toggleBaselineSize(){
+  baselineExpanded = !baselineExpanded;
+  var box = byId("baseline_code");
+  var btn = byId("toggleBaselineSizeBtn");
+  if(box){
+    if(baselineExpanded){
+      box.classList.add("expanded");
+    } else {
+      box.classList.remove("expanded");
+    }
+  }
+  if(btn){
+    btn.textContent = baselineExpanded ? "Collapse Baseline" : "Expand Baseline";
+  }
+}
+
 function toggleChatSize(){
   chatExpanded = !chatExpanded;
   var box = byId("chatHistory");
@@ -1860,29 +2047,50 @@ function toggleChatSize(){
   }
 }
 
+function refreshCurrentSnippetTurnUI(){
+  var autoTurns = getAutoTurnsForCurrent();
+  var autoTurnsNote = byId("autoTurnsNote");
+  if(autoTurnsNote){
+    autoTurnsNote.textContent = "Auto-logged turns for this snippet: " + autoTurns;
+  }
+  setChatTurnBadge(autoTurns);
+}
+
 function copyBaseline(){
-  var baseline = byId("baseline_code");
-  var text = baseline ? String(baseline.value || "") : "";
+  var text = String(baselineTextBySnippet[currentSid] || "");
   if(!text){
     setMsg("No baseline code available to copy.", false);
     return;
   }
-  if(navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(text).then(function(){
-      setMsg("Baseline copied to clipboard.", true);
-    }, function(){
-      setMsg("Could not copy baseline to clipboard.", false);
-    });
+  copyTextToClipboard(text, "Baseline copied to clipboard.", "Could not copy baseline to clipboard.");
+}
+
+function copyMarkedBaseline(){
+  if(!currentSid){
+    setMsg("No snippet selected.", false);
     return;
   }
-  try{
-    baseline.focus();
-    baseline.select();
-    var ok = document.execCommand && document.execCommand("copy");
-    setMsg(ok ? "Baseline copied to clipboard." : "Could not copy baseline to clipboard.", !!ok);
-  } catch(_err){
-    setMsg("Could not copy baseline to clipboard.", false);
+  var lines = baselineLinesForText(baselineTextBySnippet[currentSid] || "");
+  if(!lines.length){
+    setMsg("No baseline code available to copy.", false);
+    return;
   }
+  var selection = baselineSelectionBySnippet[currentSid];
+  var anchor = baselineAnchorLineBySnippet[currentSid];
+  var start = 0;
+  var end = 0;
+  if(selection && Number.isFinite(selection.start) && Number.isFinite(selection.end)){
+    start = Math.max(1, selection.start);
+    end = Math.min(lines.length, selection.end);
+  } else if(Number.isFinite(anchor) && anchor > 0){
+    start = anchor;
+    end = anchor;
+  } else {
+    setMsg("Mark a baseline line or line range first.", false);
+    return;
+  }
+  var snippet = lines.slice(start - 1, end).join("\\n");
+  copyTextToClipboard(snippet, "Marked baseline lines copied to clipboard.", "Could not copy marked baseline lines.");
 }
 
 function toggleReadme(){
@@ -1917,12 +2125,13 @@ function buildOnboardingHtml(data){
   var started = !!(data && data.timer && data.timer.study_started);
   return [
     started
-      ? "<p>Use this page as a reference while you work. The timer is already running.</p>"
+      ? "<p>Use this page as a reference while you work.</p>"
       : "<p>Complete the study inside this app. The README is only for setup and launch.</p>",
     "<h3>How To Complete Each Snippet</h3>",
     "<ul>",
     "<li>Select a snippet from the left list.</li>",
     "<li>Review the baseline code and decide whether you want to inspect it, ask questions, or change it.</li>",
+    "<li>Click one baseline line, then another, if you want to mark and copy only part of the baseline into the chat.</li>",
     "<li>Use the in-app chat however you normally would. If you decide a change is needed, place your final answer in <strong>Final Submitted Code</strong>.</li>",
     "<li>The baseline pane is reference-only. Only <strong>Final Submitted Code</strong> is exported for analysis.</li>",
     started
@@ -2032,7 +2241,7 @@ function studyStarted(){
 
 function setStudyStartedUI(){
   var locked = !studyStarted();
-  var ids = ["prevBtn","saveBtn","nextBtn","zipBtn","copyBaselineBtn","sendChatBtn","discardChatBtn","applied_turns","strategy_primary","strategy_other_text","confidence_1to5","notes","appliedZeroBtn","appliedOneBtn","appliedAllBtn"];
+  var ids = ["prevBtn","saveBtn","nextBtn","zipBtn","copyBaselineBtn","copyMarkedBaselineBtn","clearBaselineSelectionBtn","sendChatBtn","discardChatBtn","applied_turns","strategy_primary","strategy_other_text","confidence_1to5","notes","appliedZeroBtn","appliedOneBtn","appliedAllBtn"];
   for(var i=0;i<ids.length;i++){
     var el = byId(ids[i]);
     if(el){ el.disabled = locked; }
@@ -2231,8 +2440,7 @@ function loadSnippet(){
       var language = snippetLanguageLabel(currentSid);
       baselineMeta.textContent = fileName ? (language + " | " + fileName) : language;
     }
-    var baseline = byId("baseline_code");
-    if(baseline){ baseline.value = formatBaselineForDisplay(d.baseline_code || "", currentSid); }
+    renderBaselineViewer(formatBaselineForDisplay(d.baseline_code || "", currentSid), currentSid);
     var edited = byId("edited_code");
     if(edited){
       var editedText = d.edited_code || "";
@@ -2243,10 +2451,7 @@ function loadSnippet(){
     if(tool){ tool.value = "Auto-recorded"; }
     var model = byId("model");
     if(model){ model.value = "Auto-recorded"; }
-    var autoTurns = getAutoTurnsForCurrent();
-    var autoTurnsNote = byId("autoTurnsNote");
-    if(autoTurnsNote){ autoTurnsNote.textContent = "Auto-logged turns for this snippet: " + autoTurns; }
-    setChatTurnBadge(autoTurns);
+    refreshCurrentSnippetTurnUI();
     loadChatHistory();
     refreshOllamaStatus();
     renderSidebar();
@@ -2323,30 +2528,131 @@ function escHtml(text){
   return String(text || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function buildChatExchanges(entries){
+  var exchanges = [];
+  var current = null;
+  for(var i=0;i<entries.length;i++){
+    var row = entries[i] || {};
+    var role = String(row.role || "").toLowerCase();
+    var turn = String(row.turn_index || "");
+    var text = String(row.text || "");
+    if(!text.trim()){
+      continue;
+    }
+    if(role === "user"){
+      if(current){
+        exchanges.push(current);
+      }
+      current = {prompt: text, promptTurn: turn, replies: []};
+      continue;
+    }
+    if(role === "assistant"){
+      if(!current){
+        current = {prompt: "", promptTurn: "", replies: []};
+      }
+      current.replies.push({turn: turn, text: text});
+    }
+  }
+  if(current){
+    exchanges.push(current);
+  }
+  return exchanges;
+}
+
+function renderChatExchangeSelection(){
+  var indexBox = byId("chatHistoryIndex");
+  var detailBox = byId("chatHistoryDetail");
+  var exchanges = chatExchangesBySnippet[currentSid] || [];
+  if(!indexBox || !detailBox){
+    return;
+  }
+  if(!exchanges.length){
+    indexBox.innerHTML = "";
+    detailBox.innerHTML = "<div class='lbl'>No turns logged yet for this snippet.</div>";
+    return;
+  }
+  var selected = chatExchangeSelection[currentSid];
+  if(!Number.isFinite(selected) || selected < 0 || selected >= exchanges.length){
+    selected = exchanges.length - 1;
+    chatExchangeSelection[currentSid] = selected;
+  }
+  var buttons = indexBox.getElementsByTagName("button");
+  for(var bi=0; bi<buttons.length; bi++){
+    buttons[bi].className = "chatindexbtn" + (bi === selected ? " active" : "");
+  }
+  var exchange = exchanges[selected];
+  var html = "<div class='chatmeta'>Exchange " + (selected + 1) + " of " + exchanges.length + "</div>";
+  if(exchange.prompt){
+    html += "<div class='chatrow user'><div class='chatmeta'>Prompt - Turn " + escHtml(exchange.promptTurn) + "</div><div>" + escHtml(exchange.prompt) + "</div></div>";
+  } else {
+    html += "<div class='chatrow user'><div class='chatmeta'>Prompt</div><div>No prompt text was recorded for this exchange.</div></div>";
+  }
+  if(exchange.replies.length){
+    for(var ri=0; ri<exchange.replies.length; ri++){
+      var reply = exchange.replies[ri];
+      html += "<div class='chatrow assistant'><div class='chatmeta'>Assistant - Turn " + escHtml(reply.turn) + "</div><div>" + escHtml(reply.text) + "</div></div>";
+    }
+  } else {
+    html += "<div class='chatrow assistant'><div class='chatmeta'>Assistant</div><div>No assistant reply was recorded for this exchange.</div></div>";
+  }
+  detailBox.innerHTML = html;
+  detailBox.scrollTop = 0;
+}
+
+function renderChatHistory(entries){
+  var indexBox = byId("chatHistoryIndex");
+  var detailBox = byId("chatHistoryDetail");
+  if(!indexBox || !detailBox){
+    return;
+  }
+  var exchanges = buildChatExchanges(entries || []);
+  chatExchangesBySnippet[currentSid] = exchanges;
+  indexBox.innerHTML = "";
+  if(!exchanges.length){
+    detailBox.innerHTML = "<div class='lbl'>No turns logged yet for this snippet.</div>";
+    return;
+  }
+  var selected = chatExchangeSelection[currentSid];
+  if(!Number.isFinite(selected) || selected < 0 || selected >= exchanges.length){
+    selected = exchanges.length - 1;
+    chatExchangeSelection[currentSid] = selected;
+  }
+  for(var i=0;i<exchanges.length;i++){
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "chatindexbtn" + (i === selected ? " active" : "");
+    btn.textContent = "Exchange " + (i + 1);
+    btn.title = exchanges[i].prompt ? exchanges[i].prompt.slice(0, 160) : "Assistant-only exchange";
+    btn.onclick = (function(j){
+      return function(){
+        chatExchangeSelection[currentSid] = j;
+        renderChatExchangeSelection();
+      };
+    })(i);
+    indexBox.appendChild(btn);
+  }
+  renderChatExchangeSelection();
+}
+
+function refreshCurrentSnippetAfterChat(){
+  refreshCurrentSnippetTurnUI();
+  loadChatHistory();
+  renderSidebar();
+  updateNavButtons();
+  validateSummaryInputs(false);
+}
+
 function loadChatHistory(){
-  var box = byId("chatHistory");
-  if(!box || !currentSid){ return; }
+  var indexBox = byId("chatHistoryIndex");
+  var detailBox = byId("chatHistoryDetail");
+  if(!indexBox || !detailBox || !currentSid){ return; }
   api("/api/chat_history?snippet_id=" + encodeURIComponent(currentSid), "GET", null, function(d){
     var entries = (d && d.entries) ? d.entries : [];
-    setChatTurnBadge(getAutoTurnsForCurrent());
-    if(!entries.length){
-      box.innerHTML = "<div class='lbl'>No turns logged yet for this snippet.</div>";
-      return;
-    }
-    var html = "";
-    for(var i=0;i<entries.length;i++){
-      var row = entries[i] || {};
-      var role = String(row.role || "assistant");
-      var turn = String(row.turn_index || "");
-      html += "<div class='chatrow " + (role === "user" ? "user" : "assistant") + "'>";
-      html += "<div class='chatmeta'>Turn " + escHtml(turn) + " - " + escHtml(role) + "</div>";
-      html += "<div>" + escHtml(row.text || "") + "</div>";
-      html += "</div>";
-    }
-    box.innerHTML = html;
-    box.scrollTop = box.scrollHeight;
+    refreshCurrentSnippetTurnUI();
+    renderChatHistory(entries);
   }, function(msg){
-    box.innerHTML = "<div class='msg err'>Could not load chat history: " + escHtml(msg) + "</div>";
+    indexBox.innerHTML = "";
+    detailBox.innerHTML = "<div class='msg err'>Could not load chat history: " + escHtml(msg) + "</div>";
   });
 }
 
@@ -2451,8 +2757,9 @@ function sendChat(){
       } else {
         setMsg("LLM response logged for " + snippetLabel(currentSid) + ".", true);
       }
+      delete chatExchangeSelection[currentSid];
       refreshState(function(){
-        loadSnippet();
+        refreshCurrentSnippetAfterChat();
       });
     }, function(msg){
       if(activeChatRequestId !== requestId){
@@ -2564,8 +2871,14 @@ function wire(){
   if(send){ send.onclick = sendChat; }
   var discard = byId("discardChatBtn");
   if(discard){ discard.onclick = discardActiveChat; }
+  var baselineSizeBtn = byId("toggleBaselineSizeBtn");
+  if(baselineSizeBtn){ baselineSizeBtn.onclick = toggleBaselineSize; }
   var copy = byId("copyBaselineBtn");
   if(copy){ copy.onclick = copyBaseline; }
+  var copyMarked = byId("copyMarkedBaselineBtn");
+  if(copyMarked){ copyMarked.onclick = copyMarkedBaseline; }
+  var clearMarked = byId("clearBaselineSelectionBtn");
+  if(clearMarked){ clearMarked.onclick = clearBaselineSelection; }
   var toggle = byId("toggleReadme");
   if(toggle){ toggle.onclick = toggleReadme; }
   var showOnboardingBtn = byId("showOnboardingBtn");

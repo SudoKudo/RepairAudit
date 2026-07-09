@@ -25,6 +25,7 @@ BLOCKED_DIRS = [
     Path("participant_kits"),
     Path("data") / "raw",
     Path("data") / "aggregated",
+    Path("_smoke"),
 ]
 
 ALLOWED_PLACEHOLDER_NAMES = {".keep"}
@@ -38,6 +39,34 @@ SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("aws_access_key", re.compile(r"AKIA[0-9A-Z]{16}")),
     ("private_key", re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----")),
     ("bearer_header", re.compile(r"Authorization\s*:\s*Bearer\s+[A-Za-z0-9._\-]{20,}", re.IGNORECASE)),
+]
+
+PII_PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
+    (
+        "HIGH",
+        "windows_user_path",
+        re.compile(r"C:\\Users\\(?!<you>)[^\\\r\n<>\"/]+\\", re.IGNORECASE),
+    ),
+    (
+        "HIGH",
+        "unix_user_path",
+        re.compile(r"(?:/Users/|/home/)(?!<you>/)[A-Za-z0-9._-]+/"),
+    ),
+    (
+        "HIGH",
+        "email_address",
+        re.compile(r"\b[A-Z0-9._%+-]+@(?!example(?:\.com|\.edu|\.org)\b)[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE),
+    ),
+    (
+        "HIGH",
+        "public_tunnel_url",
+        re.compile(r"https://[a-z0-9.-]+\.ngrok(?:-free)?\.(?:app|dev)\b", re.IGNORECASE),
+    ),
+    (
+        "HIGH",
+        "dropbox_file_request_url",
+        re.compile(r"https://www\.dropbox\.com/request/[A-Za-z0-9]+", re.IGNORECASE),
+    ),
 ]
 
 TEXT_SUFFIXES = {
@@ -147,6 +176,9 @@ def _scan_sensitive_filenames(repo_root: Path, files: Iterable[Path]) -> list[Fi
     bad_name_tokens = [
         "chat_log.jsonl",
         "snippet_log.csv",
+        "study_assignment.json",
+        "participant_profile.json",
+        "llm_attestation.json",
         "submission_",
         "manifest_hashes.json",
     ]
@@ -195,6 +227,35 @@ def _scan_secret_patterns(repo_root: Path, files: Iterable[Path]) -> list[Findin
     return findings
 
 
+def _scan_pii_patterns(repo_root: Path, files: Iterable[Path]) -> list[Finding]:
+    """Scan text-like tracked files for direct PII and share-link signatures."""
+    findings: list[Finding] = []
+    for p in files:
+        if p.suffix.lower() not in TEXT_SUFFIXES:
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        if not text.strip():
+            continue
+
+        rel = str(p.relative_to(repo_root)).replace("\\", "/")
+        for severity, label, pattern in PII_PATTERNS:
+            match = pattern.search(text)
+            if not match:
+                continue
+            findings.append(
+                Finding(
+                    severity=severity,
+                    category="pii_pattern",
+                    path=rel,
+                    detail=f"Matched {label}: {match.group(0)[:120]}",
+                )
+            )
+    return findings
+
+
 def _scan_gitignore(repo_root: Path) -> list[Finding]:
     """Verify that blocked study-data paths are ignored by git."""
     findings: list[Finding] = []
@@ -210,7 +271,7 @@ def _scan_gitignore(repo_root: Path) -> list[Finding]:
         ]
 
     text = gi.read_text(encoding="utf-8", errors="ignore")
-    required_rules = ["runs/**", "participant_kits/**", "data/raw/**", "data/aggregated/**"]
+    required_rules = ["runs/**", "participant_kits/**", "data/raw/**", "data/aggregated/**", "_smoke/"]
     for rule in required_rules:
         if rule not in text:
             findings.append(
@@ -236,6 +297,7 @@ def run_prepublish_check(repo_root: Path) -> tuple[bool, list[Finding], str]:
     findings.extend(_scan_blocked_directories(repo_root))
     findings.extend(_scan_sensitive_filenames(repo_root, files))
     findings.extend(_scan_secret_patterns(repo_root, files))
+    findings.extend(_scan_pii_patterns(repo_root, files))
 
     ok = not any(f.severity == "HIGH" for f in findings)
     return ok, findings, mode

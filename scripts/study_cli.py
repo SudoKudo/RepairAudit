@@ -41,6 +41,7 @@ from tools.domain_classification.participant_ready import (
     DEFAULT_REJECTED_PATH,
     build_participant_ready_dataset,
 )
+from tools.dropbox.dropbox_workflow import import_participant_submissions
 from tools.instrumentation.capture_env import capture_env
 from tools.instrumentation.diff_runner import make_diff
 from tools.instrumentation.snippet_timer import mark as mark_snippet_time
@@ -942,6 +943,26 @@ def cmd_clean_participant_kits(args: argparse.Namespace) -> None:
     clean_participant_kits(args)
 
 
+def cmd_dropbox_import_submissions(args: argparse.Namespace) -> None:
+    """Download participant return ZIPs from Dropbox into the local runs tree."""
+    runs_root = Path(args.runs_root) if args.runs_root else Path("runs") / args.phase
+    result = import_participant_submissions(
+        REPO_ROOT,
+        participant_id=args.participant_id,
+        phase=args.phase,
+        runs_root=runs_root,
+        download_root=Path(args.download_root) if args.download_root else None,
+    )
+    imported = result["imported"]
+    if not imported:
+        print(f"No Dropbox ZIP submissions found for {args.participant_id}.")
+        return
+
+    print(f"Imported {len(imported)} Dropbox submission(s) for {args.participant_id}:")
+    for row in imported:
+        print(f"- {row.remote_name} -> {row.extracted_run_dir}")
+
+
 def cmd_privacy_check(args: argparse.Namespace) -> None:
     """Run pre-publish privacy checks and return non-zero on failures."""
     ok, findings, mode = run_prepublish_check(REPO_ROOT)
@@ -1315,6 +1336,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_kit.add_argument("--top_k", type=int, default=40)
     p_kit.add_argument("--num_predict", type=int, default=1536)
     p_kit.add_argument("--seed", type=int, default=42)
+    p_kit.add_argument(
+        "--dropbox_publish",
+        action="store_true",
+        help="Upload the share ZIP to Dropbox and create a participant submission file request.",
+    )
     p_kit.add_argument("--overwrite", action="store_true")
     p_kit.set_defaults(func=cmd_build_participant_kit)
 
@@ -1327,6 +1353,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_clean.add_argument("--all", action="store_true")
     p_clean.add_argument("--dry_run", action="store_true")
     p_clean.set_defaults(func=cmd_clean_participant_kits)
+
+    p_dropbox_import = sub.add_parser(
+        "dropbox-import-submissions",
+        help="Download Dropbox participant return ZIPs into runs/<phase>/.",
+    )
+    p_dropbox_import.add_argument("--participant_id", required=True)
+    p_dropbox_import.add_argument("--phase", default="pilot", choices=["self_test", "pilot", "main"])
+    p_dropbox_import.add_argument(
+        "--runs_root",
+        default="",
+        help="Optional override for the local runs root. Defaults to runs/<phase>.",
+    )
+    p_dropbox_import.add_argument(
+        "--download_root",
+        default="",
+        help="Optional override for the local Dropbox download staging folder.",
+    )
+    p_dropbox_import.set_defaults(func=cmd_dropbox_import_submissions)
 
     p_end = sub.add_parser("end-timer", help="Write run-level end timestamp.")
     p_end.add_argument("--timer_json", required=True)

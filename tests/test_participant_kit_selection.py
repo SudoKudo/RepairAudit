@@ -294,12 +294,14 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                 self.assertIn("P777/Launch_Study_Web_App.bat", names)
                 self.assertIn(f"P777/{participant_kit.PARTICIPANT_SUPPORT_DIR_NAME}/participant_web_app.py", names)
 
-                self.assertEqual(assignment["expertise_areas"], ["Backend / API Development"])
-                self.assertEqual(assignment["samples_per_hardness"], 3)
                 self.assertEqual(assignment["participant_os"], "windows")
                 self.assertEqual(assignment["source_kind"], "dataset")
                 self.assertTrue(all(sid.startswith("S") for sid in assignment["snippet_ids"]))
                 self.assertTrue(all(name.startswith("snippet_") for name in assignment["snippet_files"].values()))
+                self.assertNotIn("snippet_mappings", assignment)
+                self.assertNotIn("expertise_areas", assignment)
+                self.assertNotIn("samples_per_hardness", assignment)
+                self.assertEqual(json.loads(researcher_map.read_text(encoding="utf-8"))["out_root"], out_root.name)
             finally:
                 researcher_map.unlink(missing_ok=True)
 
@@ -390,6 +392,9 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                 self.assertNotIn("Launch_Study_Web_App.bat", participant_readme)
                 launcher_bytes = (out_root / "P888" / "Launch_Study_Web_App.sh").read_bytes()
                 self.assertNotIn(b"\r\n", launcher_bytes)
+                self.assertNotIn("snippet_mappings", assignment)
+                self.assertNotIn("expertise_areas", assignment)
+                self.assertEqual(json.loads(researcher_map.read_text(encoding="utf-8"))["out_root"], out_root.name)
                 share_zip = out_root / "_share_zips" / "participant_kit_pilot_P888.zip"
                 self.assertTrue(share_zip.exists())
                 with ZipFile(share_zip, "r") as zf:
@@ -443,6 +448,87 @@ class ParticipantKitSelectionTests(unittest.TestCase):
 
             self.assertFalse(participant_dir.exists())
             self.assertFalse(share_zip.exists())
+
+    def test_build_participant_kit_records_dropbox_metadata_in_researcher_map(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            dataset_csv = tmp_path / "classified_dataset.csv"
+            out_root = tmp_path / "kits"
+            researcher_map = (
+                Path(__file__).resolve().parents[1]
+                / "participant_kits"
+                / "_researcher_maps"
+                / "pilot__P909.json"
+            )
+
+            rows = []
+            for bucket in ("low", "medium", "high"):
+                for idx in range(1, 4):
+                    rows.append(
+                        {
+                            "sample_id": f"{bucket.upper()}{idx:03d}",
+                            "language": "Python",
+                            "hardness_strict": bucket,
+                            "code_sample": f"print('{bucket}-{idx}')",
+                            "is_vulnerable": "1",
+                            "cwe_primary": "CWE-89",
+                            "vulnerability_type": "Injection",
+                            "primary_expertise_area": "Backend / API Development",
+                            "secondary_expertise_areas": "[]",
+                            "file_path": f"src/{bucket}_{idx}.py",
+                        }
+                    )
+
+            with dataset_csv.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+                writer.writeheader()
+                for row in rows:
+                    writer.writerow(row)
+
+            args = argparse.Namespace(
+                participant_id="P909",
+                condition="security",
+                phase="pilot",
+                metadata_csv=str(dataset_csv),
+                expertise_areas="Backend / API Development",
+                samples_per_hardness=3,
+                selection_seed=11,
+                out_root=str(out_root),
+                study_id="repairaudit-v1",
+                participant_os="windows",
+                llm_provider="ollama",
+                llm_model="qwen3.6:27b",
+                temperature=0.2,
+                top_p=0.9,
+                top_k=40,
+                num_predict=1536,
+                seed=42,
+                dropbox_publish=True,
+                overwrite=False,
+            )
+
+            try:
+                with patch.object(
+                    participant_kit,
+                    "_publish_dropbox_artifacts",
+                    return_value={
+                        "published_utc": "2026-07-08T12:00:00+00:00",
+                        "kit_dropbox_path": "/RepairAudit/kits/P909/participant_kit_pilot_P909.zip",
+                        "kit_shared_url": "https://example.test/kit",
+                        "submission_folder_path": "/RepairAudit/submissions/P909",
+                        "submission_file_request_id": "fr_123",
+                        "submission_file_request_url": "https://example.test/request",
+                    },
+                ) as publish_dropbox:
+                    participant_kit.build_participant_kit(args)
+
+                payload = json.loads(researcher_map.read_text(encoding="utf-8"))
+                self.assertIn("dropbox", payload)
+                self.assertEqual(payload["dropbox"]["kit_shared_url"], "https://example.test/kit")
+                self.assertEqual(payload["dropbox"]["submission_file_request_url"], "https://example.test/request")
+                publish_dropbox.assert_called_once()
+            finally:
+                researcher_map.unlink(missing_ok=True)
 
     @unittest.skipUnless(os.name == "nt", "Windows lock cleanup test is Windows-only.")
     def test_remove_tree_with_lock_cleanup_retries_after_stale_python_stop(self) -> None:

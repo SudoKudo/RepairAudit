@@ -681,6 +681,15 @@ def _public_source_csv_ref(source_csv: Path, repo_root: Path) -> str:
         return source_csv.name
 
 
+def _public_repo_path_ref(path: Path, repo_root: Path) -> str:
+    """Return a repo-relative path when possible and fall back to the final path segment."""
+    try:
+        rel_path = path.resolve().relative_to(repo_root.resolve())
+        return rel_path.as_posix()
+    except Exception:
+        return path.name
+
+
 def _git_head_sha(repo_root: Path) -> str:
     """Return the current git commit SHA when available."""
     try:
@@ -979,27 +988,33 @@ def _write_researcher_assignment(
     condition: str,
     phase: str,
     participant_os: str,
+    out_root: str,
     source_csv: Path,
     source_kind: str,
     expertise_areas: list[str],
     samples_per_hardness: int,
     selection_seed: int,
     rows: list[dict[str, str]],
+    dropbox: dict[str, Any] | None = None,
 ) -> None:
     """Write a local-only researcher map that links participant-safe IDs back to the source rows."""
+    repo_root = Path(__file__).resolve().parents[1]
     payload = {
         "generated_utc": _participant_timestamp(),
         "participant_id": participant_id,
         "condition": condition,
         "phase": phase,
         "participant_os": participant_os,
+        "out_root": _public_repo_path_ref(Path(out_root), repo_root),
         "source_kind": source_kind,
-        "source_csv": str(source_csv),
+        "source_csv": _public_source_csv_ref(source_csv, repo_root),
         "expertise_areas": expertise_areas,
         "samples_per_hardness": samples_per_hardness,
         "selection_seed": selection_seed,
         "snippet_mappings": rows,
     }
+    if dropbox:
+        payload["dropbox"] = dropbox
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -1067,6 +1082,29 @@ def _write_participant_profile_template(profile_path: Path) -> None:
     )
 
 
+def _participant_assignment_payload(
+    *,
+    participant_id: str,
+    phase: str,
+    participant_os: str,
+    source_kind: str,
+    snippet_ids: list[str],
+    snippet_files: dict[str, str],
+    snippet_labels: dict[str, str],
+) -> dict[str, Any]:
+    """Build the participant-side assignment file without researcher-only metadata."""
+    return {
+        "generated_utc": _participant_timestamp(),
+        "participant_id": participant_id,
+        "phase": phase,
+        "participant_os": participant_os,
+        "source_kind": source_kind,
+        "snippet_ids": snippet_ids,
+        "snippet_files": snippet_files,
+        "snippet_labels": snippet_labels,
+    }
+
+
 def _parse_expertise_args(value: Any) -> list[str]:
     """Parse a comma-separated expertise list from CLI or GUI input."""
     ordered: list[str] = []
@@ -1117,6 +1155,21 @@ def _write_share_zip(*, out_root: Path, kit_dir: Path, phase: str, participant_i
             arcname = str(path.relative_to(out_root)).replace("\\", "/")
             zf.write(path, arcname=arcname)
     return zip_path
+
+
+def _dropbox_publish_enabled(args: argparse.Namespace) -> bool:
+    """Return True when the researcher asked to publish the kit through Dropbox."""
+    return bool(getattr(args, "dropbox_publish", False) or getattr(args, "dropbox_enabled", False))
+
+
+def _publish_dropbox_artifacts(*, participant_id: str, share_zip: Path) -> dict[str, Any]:
+    """Upload the share ZIP to Dropbox and open a file-request link for returns."""
+    from tools.dropbox.dropbox_workflow import publish_share_zip_artifacts
+
+    return publish_share_zip_artifacts(
+        participant_id=participant_id,
+        share_zip_path=share_zip,
+    )
 
 
 def _write_participant_readme(
@@ -1604,21 +1657,15 @@ def build_participant_kit(args: argparse.Namespace) -> None:
     (run_dir / "condition.txt").write_text(args.condition.strip() + "\n", encoding="utf-8")
     (run_dir / "study_assignment.json").write_text(
         json.dumps(
-            {
-                "generated_utc": _participant_timestamp(),
-                "participant_id": args.participant_id,
-                "condition": args.condition,
-                "phase": args.phase,
-                "participant_os": participant_os,
-                "source_kind": source_kind,
-                "expertise_areas": expertise_areas,
-                "samples_per_hardness": samples_per_hardness,
-                "selection_seed": selection_seed,
-                "snippet_ids": snippet_ids,
-                "snippet_files": snippet_files,
-                "snippet_labels": snippet_labels,
-                "snippet_mappings": _study_assignment_rows(snippets),
-            },
+            _participant_assignment_payload(
+                participant_id=args.participant_id,
+                phase=args.phase,
+                participant_os=participant_os,
+                source_kind=source_kind,
+                snippet_ids=snippet_ids,
+                snippet_files=snippet_files,
+                snippet_labels=snippet_labels,
+            ),
             indent=2,
         ),
         encoding="utf-8",
@@ -1691,20 +1738,6 @@ def build_participant_kit(args: argparse.Namespace) -> None:
         participant_os=participant_os,
     )
     repo_root = Path(__file__).resolve().parents[1]
-    _write_researcher_assignment(
-        path=repo_root / "participant_kits" / "_researcher_maps" / _researcher_map_name(args.phase, args.participant_id),
-        participant_id=args.participant_id,
-        condition=args.condition,
-        phase=args.phase,
-        participant_os=participant_os,
-        source_csv=source_csv,
-        source_kind=source_kind,
-        expertise_areas=expertise_areas,
-        samples_per_hardness=samples_per_hardness,
-        selection_seed=selection_seed,
-        rows=snippets,
-    )
-
     _write_participant_readme(
         path=kit_dir / "README.md",
         model_name=args.llm_model,
@@ -1730,10 +1763,34 @@ def build_participant_kit(args: argparse.Namespace) -> None:
         phase=args.phase,
         participant_id=args.participant_id,
     )
+    dropbox_info: dict[str, Any] | None = None
+    if _dropbox_publish_enabled(args):
+        dropbox_info = _publish_dropbox_artifacts(
+            participant_id=args.participant_id,
+            share_zip=share_zip,
+        )
+    _write_researcher_assignment(
+        path=repo_root / "participant_kits" / "_researcher_maps" / _researcher_map_name(args.phase, args.participant_id),
+        participant_id=args.participant_id,
+        condition=args.condition,
+        phase=args.phase,
+        participant_os=participant_os,
+        out_root=str(out_root),
+        source_csv=source_csv,
+        source_kind=source_kind,
+        expertise_areas=expertise_areas,
+        samples_per_hardness=samples_per_hardness,
+        selection_seed=selection_seed,
+        rows=snippets,
+        dropbox=dropbox_info,
+    )
 
     print("Participant kit created.")
     print(f"Kit: {kit_dir}")
     print(f"Share ZIP: {share_zip}")
+    if dropbox_info:
+        print(f"Dropbox kit URL: {dropbox_info['kit_shared_url']}")
+        print(f"Dropbox submission URL: {dropbox_info['submission_file_request_url']}")
     print(f"Support folder: {support_dir}")
     print(f"Snippets: {len(snippet_ids)}")
 

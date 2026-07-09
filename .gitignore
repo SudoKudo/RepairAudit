@@ -58,6 +58,7 @@ data/aggregated/**
 tmp_*/
 _tmp_*/
 _*.py
+_smoke/
 
 # =========================
 # Bandit / tool outputs

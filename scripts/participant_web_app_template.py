@@ -144,7 +144,6 @@ class StudyStore:
         self.timer_path = self.run_dir / "start_end_times.json"
         self.snippet_times_path = self.run_dir / "timings" / "snippet_times.json"
         self.attestation_path = self.run_dir / "logs" / "llm_attestation.json"
-        self.client_meta_path = self.run_dir / "logs" / "client_meta.json"
         self.participant_profile_path = self.run_dir / "logs" / "participant_profile.json"
 
         self.fields = [
@@ -647,18 +646,6 @@ class StudyStore:
                 out.append(str(fp.relative_to(self.run_dir)).replace("\\", "/"))
         return out
 
-    def write_client_meta(self, payload: dict[str, object]) -> None:
-        """Persist lightweight client fingerprint metadata (non-PII)."""
-        safe = {
-            "captured_utc": utc_now(),
-            "platform": str(payload.get("platform", "") or ""),
-            "user_agent": str(payload.get("user_agent", "") or ""),
-            "language": str(payload.get("language", "") or ""),
-            "app_version": str(payload.get("app_version", "") or ""),
-        }
-        self.client_meta_path.parent.mkdir(parents=True, exist_ok=True)
-        self.client_meta_path.write_text(json.dumps(safe, indent=2), encoding="utf-8")
-
     def read_participant_profile(self) -> dict[str, str]:
         """Load participant-level experience fields used as analysis covariates."""
         if not self.participant_profile_path.exists():
@@ -923,7 +910,7 @@ class StudyStore:
 
 def html_page(csrf_token: str) -> str:
     """Return participant UI HTML for the in-kit web app."""
-    return """<!doctype html>
+    return r"""<!doctype html>
 <html>
 <head>
 <meta charset="utf-8" />
@@ -3575,12 +3562,6 @@ class AppHandler(BaseHTTPRequestHandler):
                     AppHandler.heartbeat_seen = True
                     self.store.heartbeat()
                 self._json({"ok": True, "timer": self.store.timer_status()})
-                return
-
-            if parsed.path == "/api/client_meta":
-                AppHandler.touch_client_poll()
-                self.store.write_client_meta(body)
-                self._json({"ok": True})
                 return
 
             if parsed.path == "/api/save_profile":

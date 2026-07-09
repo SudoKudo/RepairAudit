@@ -24,6 +24,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.privacy_check import Finding, run_prepublish_check
+from tools.dropbox.dropbox_workflow import (
+    import_participant_submissions_batch,
+    list_researcher_maps,
+    verify_dropbox_access,
+)
 
 PIPELINE_STEPS: list[str] = [
     "Run Analyzed",
@@ -68,6 +73,27 @@ def _canonical_run_id(run_dir: Path) -> str:
     if resolved.name.startswith("run_"):
         return resolved.parent.name
     return resolved.name
+
+
+def _find_phase_participant_run_dir(phase_root: Path, participant_id: str) -> Path:
+    """Find one participant run under a phase root, including imported submission folders."""
+    direct = phase_root / participant_id
+    if direct.exists():
+        return direct
+    if not phase_root.exists():
+        return direct
+
+    nested_candidates: list[Path] = []
+    for candidate_root in sorted([p for p in phase_root.iterdir() if p.is_dir()]):
+        nested = candidate_root / participant_id
+        if nested.exists():
+            nested_candidates.append(nested)
+
+    if not nested_candidates:
+        return direct
+
+    nested_candidates.sort(key=lambda path: path.parent.name, reverse=True)
+    return nested_candidates[0]
 
 
 def _resolve_output_path(repo_root: Path, value: str) -> Path:
@@ -178,6 +204,8 @@ class StudyGUI(tk.Tk):
         self._workflow_stop_requested = False
         self._workflow_lock = threading.Lock()
         self._last_privacy_scan: Optional[tuple[bool, list[Finding], str]] = None
+        self._last_dropbox_import_result: Optional[dict[str, Any]] = None
+        self._last_dropbox_access: Optional[dict[str, str]] = None
 
         # Live workflow feedback shown in the Actions panel.
         self.workflow_state_var = tk.StringVar(value="Idle")
@@ -724,14 +752,20 @@ class StudyGUI(tk.Tk):
         ttk.Button(panel, text="Open HTML Report", command=self.open_html_report, style="Secondary.TButton").grid(
             row=3, column=0, columnspan=3, pady=(0, 6), sticky="ew"
         )
-        ttk.Button(panel, text="Build Judge Calibration", command=self.build_judge_calibration, style="Toolbar.TButton").grid(
-            row=4, column=0, columnspan=3, sticky="ew", pady=(0, 6)
+        ttk.Button(panel, text="Import Dropbox Returns", command=self.import_dropbox_returns, style="Toolbar.TButton").grid(
+            row=4, column=0, columnspan=2, sticky="ew", pady=(0, 6)
         )
-        ttk.Button(panel, text="Run Judge Audit", command=self.run_judge_audit, style="Toolbar.TButton").grid(
+        ttk.Button(panel, text="Check Dropbox Access", command=self.check_dropbox_access, style="Secondary.TButton").grid(
+            row=4, column=2, sticky="ew", pady=(0, 6), padx=(6, 0)
+        )
+        ttk.Button(panel, text="Build Judge Calibration", command=self.build_judge_calibration, style="Toolbar.TButton").grid(
             row=5, column=0, columnspan=3, sticky="ew", pady=(0, 6)
         )
+        ttk.Button(panel, text="Run Judge Audit", command=self.run_judge_audit, style="Toolbar.TButton").grid(
+            row=6, column=0, columnspan=3, sticky="ew", pady=(0, 6)
+        )
         ttk.Button(panel, text="Pre-Publish Repo Scan", command=self.run_privacy_check, style="Toolbar.TButton").grid(
-            row=6, column=0, columnspan=3, sticky="w"
+            row=7, column=0, columnspan=3, sticky="w"
         )
         ttk.Label(
             panel,
@@ -739,7 +773,7 @@ class StudyGUI(tk.Tk):
             style="Hint.TLabel",
             wraplength=340,
             justify="left",
-        ).grid(row=7, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ).grid(row=8, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
 
     def _build_status_panel(self, parent: ttk.Frame) -> None:
@@ -751,7 +785,7 @@ class StudyGUI(tk.Tk):
 
         ttk.Label(
             panel,
-            text="Select participants and inspect current pipeline status in one table.",
+            text="Select participants and inspect current pipeline status in one table. Rows come from saved kits and imported local runs for the active phase.",
             style="Hint.TLabel",
             wraplength=500,
             justify="left",
@@ -853,13 +887,31 @@ class StudyGUI(tk.Tk):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _run_dir(self, participant_id: str) -> Path:
-        """Return relative run folder path for one participant in the active phase."""
-        return Path("runs") / self.phase_var.get().strip() / participant_id
-
     def _phase_root(self) -> Path:
         """Return absolute phase root under runs/."""
         return REPO_ROOT / "runs" / self.phase_var.get().strip()
+
+    def _participant_run_dir(self, participant_id: str) -> Path:
+        """Return the best local run directory for one participant in the active phase."""
+        return _find_phase_participant_run_dir(self._phase_root(), participant_id)
+
+    def _participant_ids_for_phase(self) -> list[str]:
+        """Return participant IDs known through researcher maps or local runs for the active phase."""
+        phase = self.phase_var.get().strip()
+        participant_ids: set[str] = set()
+
+        for item in list_researcher_maps(REPO_ROOT):
+            if item["phase"] == phase:
+                participant_ids.add(item["participant_id"])
+
+        phase_root = self._phase_root()
+        if phase_root.exists():
+            for candidate_root in sorted([path for path in phase_root.iterdir() if path.is_dir()], key=lambda path: path.name):
+                participant_id = _canonical_run_id(candidate_root)
+                if participant_id:
+                    participant_ids.add(participant_id)
+
+        return sorted(participant_ids)
 
     def _aggregate_summary_path(self) -> Path:
         """Return the configured aggregate summary CSV path."""
@@ -1085,16 +1137,16 @@ class StudyGUI(tk.Tk):
             self.participant_status_tree.delete(item)
 
         phase_root = self._phase_root()
-        if not phase_root.exists():
+        participant_ids = self._participant_ids_for_phase()
+        if not participant_ids and not phase_root.exists():
             return
 
-        run_dirs = sorted([p for p in phase_root.iterdir() if p.is_dir()], key=lambda p: p.name)
         selected_items: list[str] = []
-        for run_dir in run_dirs:
-            display_id = _canonical_run_id(run_dir)
-            st = self._step_status_for_run(REPO_ROOT / self._run_dir(run_dir.name))
+        for participant_id in participant_ids:
+            run_dir = self._participant_run_dir(participant_id)
+            st = self._step_status_for_run(run_dir)
             values = (
-                display_id,
+                participant_id,
                 "OK" if st.get("Run Analyzed", False) else "...",
                 "OK" if st.get("Interaction Merged", False) else "...",
                 "OK" if st.get("Pilot Aggregated", False) else "...",
@@ -1103,8 +1155,8 @@ class StudyGUI(tk.Tk):
             )
             completed = sum(1 for flag in st.values() if flag)
             tag = "ok" if completed == len(PIPELINE_STEPS) else "pending" if completed == 0 else "mixed"
-            item_id = self.participant_status_tree.insert("", "end", iid=run_dir.name, values=values, tags=(tag,))
-            if run_dir.name in previous_selection:
+            item_id = self.participant_status_tree.insert("", "end", iid=participant_id, values=values, tags=(tag,))
+            if participant_id in previous_selection:
                 selected_items.append(item_id)
 
         if selected_items:
@@ -1780,6 +1832,17 @@ class StudyGUI(tk.Tk):
             messagebox.showinfo("No participants", "Select one or more participants in the status table.")
             return
 
+        missing_runs = [pid for pid in participants if not self._participant_run_dir(pid).exists()]
+        if missing_runs:
+            listed = "\n".join(missing_runs)
+            messagebox.showwarning(
+                "Runs Missing",
+                "The selected participants do not have local runs yet.\n\n"
+                f"{listed}\n\n"
+                "Import their Dropbox return ZIPs before starting analysis.",
+            )
+            return
+
         try:
             judge_env = self._collect_judge_env()
         except Exception as exc:
@@ -1808,8 +1871,9 @@ class StudyGUI(tk.Tk):
             )
             steps.append(CommandStep(label=f"Analyze {pid}", command=analyze_cmd, env=judge_env))
 
-            run_rel = self._run_dir(pid).as_posix()
-            resolved_run_dir = _resolve_run_dir(REPO_ROOT / run_rel)
+            requested_run_dir = self._participant_run_dir(pid)
+            run_rel = _path_arg_for_repo(REPO_ROOT, requested_run_dir)
+            resolved_run_dir = _resolve_run_dir(requested_run_dir)
             log_csv = (resolved_run_dir / "logs" / "snippet_log.csv").resolve()
             if log_csv.exists():
                 merge_cmd = self._python_cmd("-m", "scripts.study_cli", "merge-interaction", "--run_dir", run_rel)
@@ -1905,6 +1969,117 @@ class StudyGUI(tk.Tk):
                 "Analysis Stopped",
                 "The analysis pipeline was stopped before completion.",
             ),
+        )
+
+    def _run_dropbox_import_step(self) -> None:
+        """Import Dropbox return ZIPs for the selected participants."""
+        participants = self._extract_selected_participant_ids()
+        phase = self.phase_var.get().strip()
+        selected_rows = [{"participant_id": pid, "phase": phase, "payload": {}} for pid in participants]
+        result = import_participant_submissions_batch(
+            REPO_ROOT,
+            participants=selected_rows,
+            default_runs_root=self._phase_root(),
+        )
+        self._last_dropbox_import_result = result
+
+        successes = result.get("successes", [])
+        failures = result.get("failures", [])
+        imported_count = 0
+        for row in successes:
+            participant_id = str(row.get("participant_id", ""))
+            imported = row.get("imported", [])
+            if not imported:
+                self._append_log(f"[dropbox_import] {participant_id}: no ZIP files found")
+                continue
+            for item in imported:
+                remote_name = getattr(item, "remote_name", "")
+                extracted_run_dir = getattr(item, "extracted_run_dir", "")
+                imported_count += 1
+                self._append_log(f"[dropbox_import] {participant_id}: {remote_name} -> {extracted_run_dir}")
+        for row in failures:
+            self._append_log(
+                f"[dropbox_import] {row.get('phase', '')}/{row.get('participant_id', '')} failed: {row.get('error', '')}"
+            )
+        self._append_log(
+            f"[dropbox_import] participants={len(successes)} imported_zips={imported_count} failures={len(failures)}"
+        )
+
+    def import_dropbox_returns(self) -> None:
+        """Download Dropbox return ZIPs for the selected participants."""
+        participants = self._extract_selected_participant_ids()
+        if not participants:
+            messagebox.showinfo("No participants", "Select one or more participants in the status table.")
+            return
+
+        self._last_dropbox_import_result = None
+        step = CommandStep(label="Import Dropbox Returns", action=self._run_dropbox_import_step)
+        self._start_workflow(
+            "import_dropbox_returns",
+            [step],
+            on_complete=self._show_dropbox_import_popup,
+            on_failure=lambda _step_label: self._show_dropbox_import_popup(),
+            on_stopped=lambda: self._show_message(
+                "warning",
+                "Dropbox Import Stopped",
+                "The Dropbox import was stopped before completion.",
+            ),
+        )
+
+    def _show_dropbox_import_popup(self) -> None:
+        """Summarize the last Dropbox import run."""
+        result = getattr(self, "_last_dropbox_import_result", None)
+        if not isinstance(result, dict):
+            self._show_message("info", "Dropbox Import", "No Dropbox import results are available.")
+            return
+
+        successes = result.get("successes", [])
+        failures = result.get("failures", [])
+        imported_count = sum(len(row.get("imported", [])) for row in successes if isinstance(row, dict))
+        self._show_message(
+            "info" if not failures else "warning",
+            "Dropbox Import Complete",
+            f"Participants processed: {len(successes)}\n"
+            f"ZIP files imported: {imported_count}\n"
+            f"Failures: {len(failures)}\n\n"
+            "See the Execution Log for per-participant details.",
+        )
+
+    def _run_dropbox_access_step(self) -> None:
+        """Verify Dropbox credentials and log the account summary."""
+        result = verify_dropbox_access()
+        self._last_dropbox_access = result
+        self._append_log(
+            "[dropbox_access] "
+            f"{result.get('display_name', '')} <{result.get('email', '')}>"
+        )
+
+    def check_dropbox_access(self) -> None:
+        """Check the Dropbox account configured on this machine."""
+        self._last_dropbox_access = None
+        step = CommandStep(label="Check Dropbox Access", action=self._run_dropbox_access_step)
+        self._start_workflow(
+            "check_dropbox_access",
+            [step],
+            on_complete=self._show_dropbox_access_popup,
+            on_failure=lambda _step_label: self._show_dropbox_access_popup(),
+            on_stopped=lambda: self._show_message(
+                "warning",
+                "Dropbox Access Check",
+                "The Dropbox access check was stopped before completion.",
+            ),
+        )
+
+    def _show_dropbox_access_popup(self) -> None:
+        """Render the last Dropbox access check."""
+        result = getattr(self, "_last_dropbox_access", None)
+        if not isinstance(result, dict):
+            self._show_message("info", "Dropbox Access", "No Dropbox account details are available.")
+            return
+        self._show_message(
+            "info",
+            "Dropbox Access Ready",
+            f"Connected as:\n{result.get('display_name', '')}\n{result.get('email', '')}",
         )
 
     def run_privacy_check(self) -> None:

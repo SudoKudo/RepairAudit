@@ -52,6 +52,13 @@ RepairAudit/
 |   |   |-- expertise_areas.jsonl        # Closed expertise taxonomy
 |   |   `-- dataset_classified.zip       # Downloadable archive copy of the large dataset
 |   |
+|   |-- dropbox/
+|   |   |-- dropbox_client.py          # Researcher-side Dropbox auth and path helpers
+|   |   |-- dropbox_api.py             # File requests and shared-link helpers
+|   |   |-- dropbox_uploader.py        # Upload kit archives to Dropbox
+|   |   |-- dropbox_submissions.py     # Pull participant return ZIPs into runs/
+|   |   `-- dropbox_workflow.py        # Shared publish/import helpers for the researcher GUIs
+|   |
 |   |-- instrumentation/
 |   |   |-- capture_env.py               # Save a public-safe environment snapshot
 |   |   |-- diff_runner.py               # Build unified diffs and edit counts
@@ -97,11 +104,13 @@ venv\Scripts\python.exe -m pip install -r requirements.txt
 
 If you already have `python` or `py` pointing at Python `3.10`, use that instead.
 
+If you want to use Dropbox for kit delivery and return collection, create a local `.env` at the repo root from `.env.example`. Keep that file on the researcher machine only.
+
 ## LLM Endpoints
 
 There are two LLM settings in this repo:
 
-- Researcher-side judge settings live in [config.yaml](C:/Users/Bao%20Bun/Documents/GitHub/RepairAudit/config.yaml).
+- Researcher-side judge settings live in `config.yaml`.
 - Participant kit settings are stamped into each generated kit.
 
 The participant app expects an Ollama-compatible HTTP endpoint. That can be:
@@ -126,7 +135,7 @@ If you use a remote endpoint for participants, set that URL in the kit builder b
 2. Audit the LLM judge if the judge config changed.
 3. Build participant kits.
 4. Distribute kits and collect returned ZIP files.
-5. Extract each return ZIP into `runs/<phase>/`.
+5. Extract each return ZIP into `runs/<phase>/`, or pull it from Dropbox into that same location.
 6. Analyze runs and merge interaction logs.
 7. Build aggregate outputs and the HTML report.
 
@@ -173,7 +182,7 @@ GUI:
 venv\Scripts\python.exe gui\kit_builder_gui.py
 ```
 
-![Participant Kit Builder GUI](C:/Users/Bao%20Bun/Documents/GitHub/RepairAudit/docs/figures/Participant_Kit_Gui.png)
+![Participant Kit Builder GUI](docs/figures/Participant_Kit_Gui.png)
 *Figure 1. Kit builder for participant IDs, endpoint settings, expertise areas, and sampling controls.*
 
 CLI:
@@ -188,8 +197,37 @@ venv\Scripts\python.exe -m scripts.study_cli build-participant-kit `
   --selection_seed 42 `
   --participant_os windows `
   --llm_base_url https://lab-llm.example.edu `
+  --dropbox_publish `
   --out_root participant_kits
 ```
+
+When `--dropbox_publish` is enabled, the builder still writes the local kit folder and share ZIP. It also:
+
+- Uploads the share ZIP to Dropbox under `/RepairAudit/kits/<participant_id>/`
+- Creates a Dropbox file request under `/RepairAudit/submissions/<participant_id>/`
+- Stores those URLs in `participant_kits/_researcher_maps/<phase>__<participant_id>.json`
+
+The kit builder GUI also shows saved kits for the current phase. Use that table to:
+
+- Verify the Dropbox account bound through the local `.env`
+- Select one or more saved kits
+- Publish selected share ZIPs to Dropbox after kit creation
+
+Participant return path:
+
+- Send the participant the kit URL from Dropbox
+- After they finish the study, have them upload the exported ZIP to their Dropbox submission URL
+- Then use the study GUI to import those returned ZIPs into the local `runs/` tree
+
+### Import return ZIPs from Dropbox
+
+```powershell
+venv\Scripts\python.exe -m scripts.study_cli dropbox-import-submissions `
+  --participant_id P101 `
+  --phase pilot
+```
+
+That command downloads every ZIP in `/RepairAudit/submissions/P101/` and extracts each one into a timestamped `runs/pilot/submission_*` folder.
 
 ### Analyze returned runs
 
@@ -215,12 +253,14 @@ venv\Scripts\python.exe gui\study_gui.py
 
 Use it to:
 
-- Review imported runs
+- Review saved participants and imported runs for the active phase
+- Import Dropbox return ZIPs for the selected participants
+- Verify Dropbox access on the researcher machine
 - Run judge calibration and audit
 - Toggle frozen judge scoring
 - Launch analyze, merge, aggregate, stats, model, and report steps
 
-![Research Console GUI](C:/Users/Bao%20Bun/Documents/GitHub/RepairAudit/docs/figures/Research_Console_GUI.png)
+![Research Console GUI](docs/figures/Research_Console_GUI.png)
 *Figure 2. Research console for ingest review, judge settings, and pipeline execution.*
 
 ## Kit Source Rules
@@ -279,6 +319,8 @@ Researcher-side local files:
 - `participant_kits/_researcher_maps/`
 - `participant_kits/_share_zips/`
 
+When Dropbox publish is enabled, the researcher map also records the kit share link and the participant submission file-request link.
+
 ## Run Folder Contract
 
 An extracted participant return should contain:
@@ -288,7 +330,7 @@ An extracted participant return should contain:
 - `logs/snippet_log.csv`
 - `logs/chat_log.jsonl`
 - `logs/participant_profile.json`
-- `study_assignment.json`
+- `study_assignment.json` (participant-safe snippet ID and filename mapping only)
 - `condition.txt`
 
 Analysis adds:

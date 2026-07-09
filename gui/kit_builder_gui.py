@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from pathlib import Path
+import threading
 from typing import Any, Callable
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -27,6 +28,12 @@ from scripts.participant_kit import (  # noqa: E402
     PARTICIPANT_OS_LABELS,
     PARTICIPANT_SUPPORT_DIR_NAME,
     build_participant_kit,
+)
+from tools.dropbox.dropbox_workflow import (  # noqa: E402
+    list_researcher_maps,
+    local_delivery_state,
+    publish_participant_kit_batch,
+    verify_dropbox_access,
 )
 
 
@@ -137,11 +144,16 @@ class KitBuilderGUI(tk.Tk):
         self.start_index_var = tk.IntVar(value=1)
         self.pad_width_var = tk.IntVar(value=3)
         self.overwrite_var = tk.BooleanVar(value=False)
+        self.dropbox_publish_var = tk.BooleanVar(value=False)
+        self._dropbox_task_thread: threading.Thread | None = None
+        self._saved_map_items_by_iid: dict[str, dict[str, Any]] = {}
 
         self._configure_styles()
         self._build_ui()
         self._restore_state_into_form(initial_state)
         self._register_state_watchers()
+        self.phase_var.trace_add("write", self._on_saved_kits_filter_changed)
+        self._refresh_saved_kits_table()
         self._refresh_preview()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -210,6 +222,7 @@ class KitBuilderGUI(tk.Tk):
             "start_index": int(self.start_index_var.get()),
             "pad_width": int(self.pad_width_var.get()),
             "overwrite": bool(self.overwrite_var.get()),
+            "dropbox_publish": bool(self.dropbox_publish_var.get()),
             "expertise_areas": self._selected_expertise_areas(),
         }
 
@@ -270,6 +283,7 @@ class KitBuilderGUI(tk.Tk):
             self.start_index_var.set(int(form.get("start_index", self.start_index_var.get())))
             self.pad_width_var.set(int(form.get("pad_width", self.pad_width_var.get())))
             self.overwrite_var.set(bool(form.get("overwrite", self.overwrite_var.get())))
+            self.dropbox_publish_var.set(bool(form.get("dropbox_publish", self.dropbox_publish_var.get())))
 
             selected_obj = form.get("expertise_areas")
             selected = {str(label) for label in selected_obj} if isinstance(selected_obj, list) else set()
@@ -299,6 +313,7 @@ class KitBuilderGUI(tk.Tk):
             self.start_index_var,
             self.pad_width_var,
             self.overwrite_var,
+            self.dropbox_publish_var,
             *self.expertise_vars.values(),
         ]
         for var in tracked_vars:
@@ -307,6 +322,11 @@ class KitBuilderGUI(tk.Tk):
     def _on_state_var_changed(self, *_args: str) -> None:
         """Handle Tk variable updates in one place."""
         self._write_session_state()
+
+    def _on_saved_kits_filter_changed(self, *_args: str) -> None:
+        """Refresh the saved-kit table after the phase filter changes."""
+        if hasattr(self, "saved_kit_tree"):
+            self._refresh_saved_kits_table()
 
     def _configure_styles(self) -> None:
         """Configure ttk styles shared across the kit builder layout."""
@@ -333,6 +353,9 @@ class KitBuilderGUI(tk.Tk):
         style.map("TCombobox", fieldbackground=[("readonly", "#ffffff")], background=[("readonly", "#ffffff")], foreground=[("readonly", self._text)], selectbackground=[("readonly", "#ffffff")], selectforeground=[("readonly", self._text)])
         style.configure("TCheckbutton", background=self._panel, foreground=self._text)
         style.map("TCheckbutton", background=[("active", self._panel)], foreground=[("active", self._text)])
+        style.configure("Treeview", background="#ffffff", fieldbackground="#ffffff", foreground=self._text, bordercolor=self._border, lightcolor=self._border, darkcolor=self._border, rowheight=28)
+        style.map("Treeview", background=[("selected", self._panel_soft)], foreground=[("selected", self._text)])
+        style.configure("Treeview.Heading", background=self._panel, foreground=self._text, bordercolor=self._border, relief="flat", font=("Segoe UI Semibold", 9), padding=(6, 6))
 
     def _build_ui(self) -> None:
         """Create all widgets and layout rules."""
@@ -441,10 +464,11 @@ class KitBuilderGUI(tk.Tk):
         self._row_spin(naming, 3, "Start Number", self.start_index_var, 0, 99999, self._refresh_preview)
         self._row_spin(naming, 4, "Zero-Pad Width", self.pad_width_var, 0, 8, self._refresh_preview)
         ttk.Checkbutton(naming, text="Allow overwrite of existing kit folders", variable=self.overwrite_var).grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 8))
-        ttk.Label(naming, text="Preview of participant IDs to create", style="Field.TLabel").grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        ttk.Checkbutton(naming, text="Publish share ZIP and submission link through Dropbox", variable=self.dropbox_publish_var).grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        ttk.Label(naming, text="Preview of participant IDs to create", style="Field.TLabel").grid(row=7, column=0, columnspan=2, sticky="w", pady=(0, 6))
 
         preview_shell = tk.Frame(naming, bg=self._log_bg, highlightbackground=self._border_strong, highlightthickness=1, bd=0)
-        preview_shell.grid(row=7, column=0, columnspan=2, sticky="nsew")
+        preview_shell.grid(row=8, column=0, columnspan=2, sticky="nsew")
         preview_shell.columnconfigure(0, weight=1)
         preview_shell.rowconfigure(0, weight=1)
         self.preview_box = tk.Text(preview_shell, height=6, wrap="word", bg=self._log_bg, fg=self._log_fg, insertbackground=self._log_fg, selectbackground="#1b3555", relief="flat", bd=0, padx=10, pady=10, font=("Consolas", 10))
@@ -452,7 +476,7 @@ class KitBuilderGUI(tk.Tk):
         self.preview_box.configure(state="disabled")
 
         actions = ttk.Frame(root, style="Root.TFrame")
-        actions.grid(row=4, column=0, sticky="ew", pady=(10, 0))
+        actions.grid(row=5, column=0, sticky="ew", pady=(10, 0))
         actions.columnconfigure(0, weight=1)
 
         ttk.Label(actions, text="Refresh the preview before creating kits. Existing folders are blocked unless overwrite is enabled.", style="Hint.TLabel", wraplength=760, justify="left").grid(row=0, column=0, sticky="w")
@@ -463,6 +487,58 @@ class KitBuilderGUI(tk.Tk):
         button_bar.columnconfigure(1, weight=1, uniform="kit_actions")
         ttk.Button(button_bar, text="Refresh Preview", command=self._refresh_preview, style="Secondary.TButton").grid(row=0, column=0, padx=(0, 6), sticky="ew")
         ttk.Button(button_bar, text="Create Kits", command=self._create_kits, style="Primary.TButton").grid(row=0, column=1, padx=(6, 0), sticky="ew")
+
+        saved_kits = ttk.LabelFrame(root, text="Saved Kits", style="Card.TLabelframe", padding=12)
+        saved_kits.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        saved_kits.columnconfigure(0, weight=1)
+        saved_kits.rowconfigure(2, weight=1)
+
+        ttk.Label(
+            saved_kits,
+            text="The table follows the current phase setting. Select one or more saved kits here when you want to publish existing share ZIPs to Dropbox.",
+            style="Hint.TLabel",
+            wraplength=760,
+            justify="left",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        saved_toolbar = ttk.Frame(saved_kits, style="Panel.TFrame")
+        saved_toolbar.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        ttk.Button(saved_toolbar, text="Refresh", command=self._refresh_saved_kits_table, style="Secondary.TButton").pack(side="left", padx=(0, 6))
+        ttk.Button(saved_toolbar, text="Select All", command=self._select_all_saved_kits, style="Secondary.TButton").pack(side="left", padx=(0, 6))
+        ttk.Button(saved_toolbar, text="Clear", command=self._clear_saved_kit_selection, style="Secondary.TButton").pack(side="left", padx=(0, 12))
+        self.check_dropbox_button = ttk.Button(saved_toolbar, text="Check Dropbox Access", command=self._check_dropbox_access, style="Secondary.TButton")
+        self.check_dropbox_button.pack(side="left", padx=(0, 6))
+        self.publish_saved_kits_button = ttk.Button(saved_toolbar, text="Publish Selected Kits", command=self._publish_selected_saved_kits, style="Primary.TButton")
+        self.publish_saved_kits_button.pack(side="left")
+
+        table_shell = ttk.Frame(saved_kits, style="Panel.TFrame")
+        table_shell.grid(row=2, column=0, sticky="nsew")
+        table_shell.columnconfigure(0, weight=1)
+        table_shell.rowconfigure(0, weight=1)
+
+        columns = ("participant", "phase", "zip_state", "dropbox_state")
+        self.saved_kit_tree = ttk.Treeview(
+            table_shell,
+            columns=columns,
+            show="headings",
+            selectmode="extended",
+            height=8,
+        )
+        self.saved_kit_tree.heading("participant", text="Participant")
+        self.saved_kit_tree.heading("phase", text="Phase")
+        self.saved_kit_tree.heading("zip_state", text="Share ZIP")
+        self.saved_kit_tree.heading("dropbox_state", text="Dropbox")
+        self.saved_kit_tree.column("participant", width=170, minwidth=120, anchor="w", stretch=True)
+        self.saved_kit_tree.column("phase", width=90, minwidth=72, anchor="center", stretch=False)
+        self.saved_kit_tree.column("zip_state", width=110, minwidth=90, anchor="center", stretch=False)
+        self.saved_kit_tree.column("dropbox_state", width=110, minwidth=90, anchor="center", stretch=False)
+        self.saved_kit_tree.grid(row=0, column=0, sticky="nsew")
+        self.saved_kit_tree.tag_configure("ready", background="#eefaf4")
+        self.saved_kit_tree.tag_configure("needs_attention", background="#fff8ec")
+
+        table_scroll = ttk.Scrollbar(table_shell, orient="vertical", command=self.saved_kit_tree.yview)
+        table_scroll.grid(row=0, column=1, sticky="ns", padx=(8, 0))
+        self.saved_kit_tree.configure(yscrollcommand=table_scroll.set)
 
     def _row_entry(self, parent: ttk.Frame | ttk.LabelFrame, row: int, label: str, var: tk.StringVar, on_change: Callable[[], None] | None = None, column_offset: int = 0, columnspan: int = 1) -> None:
         """Create one label + entry row."""
@@ -549,6 +625,180 @@ class KitBuilderGUI(tk.Tk):
                 conflicts.append(pid)
         return conflicts
 
+    def _saved_kit_row_id(self, *, phase: str, participant_id: str) -> str:
+        """Build the stable Treeview row ID for one saved kit."""
+        return f"{phase}::{participant_id}"
+
+    def _saved_kit_items(self) -> list[dict[str, Any]]:
+        """Return saved researcher maps for the active phase."""
+        selected_phase = self.phase_var.get().strip() or "pilot"
+        return [item for item in list_researcher_maps(REPO_ROOT) if item["phase"] == selected_phase]
+
+    def _refresh_saved_kits_table(self, *, select_participant_ids: list[str] | None = None) -> None:
+        """Reload the saved-kit table from researcher maps."""
+        previous_selection = set(self.saved_kit_tree.selection()) if hasattr(self, "saved_kit_tree") else set()
+        requested_selection = {
+            self._saved_kit_row_id(phase=self.phase_var.get().strip() or "pilot", participant_id=participant_id)
+            for participant_id in (select_participant_ids or [])
+        }
+
+        self._saved_map_items_by_iid = {}
+        for item_id in self.saved_kit_tree.get_children():
+            self.saved_kit_tree.delete(item_id)
+
+        restored_selection: list[str] = []
+        for item in self._saved_kit_items():
+            payload = item["payload"]
+            payload_dict = payload if isinstance(payload, dict) else {}
+            out_root = _clean_text(payload_dict.get("out_root")) or self.out_root_var.get().strip() or "participant_kits"
+            local_state = local_delivery_state(
+                REPO_ROOT,
+                out_root=out_root,
+                phase=item["phase"],
+                participant_id=item["participant_id"],
+            )
+            dropbox_payload = payload_dict.get("dropbox")
+            published = isinstance(dropbox_payload, dict) and bool(_clean_text(dropbox_payload.get("kit_shared_url")))
+            zip_state = "Ready" if local_state["share_zip_exists"] else "Missing"
+            dropbox_state = "Published" if published else "Not yet"
+            tag = "ready" if local_state["share_zip_exists"] else "needs_attention"
+            iid = self._saved_kit_row_id(phase=item["phase"], participant_id=item["participant_id"])
+            self._saved_map_items_by_iid[iid] = item
+            self.saved_kit_tree.insert(
+                "",
+                "end",
+                iid=iid,
+                values=(item["participant_id"], item["phase"], zip_state, dropbox_state),
+                tags=(tag,),
+            )
+            if iid in previous_selection or iid in requested_selection:
+                restored_selection.append(iid)
+
+        if restored_selection:
+            self.saved_kit_tree.selection_set(restored_selection)
+            self.saved_kit_tree.focus(restored_selection[0])
+
+    def _selected_saved_kit_items(self) -> list[dict[str, Any]]:
+        """Return the saved-kit rows currently selected in the table."""
+        selected_items: list[dict[str, Any]] = []
+        for item_id in self.saved_kit_tree.selection():
+            row = self._saved_map_items_by_iid.get(str(item_id))
+            if row is not None:
+                selected_items.append(row)
+        return selected_items
+
+    def _select_all_saved_kits(self) -> None:
+        """Select every visible saved kit."""
+        self.saved_kit_tree.selection_set(self.saved_kit_tree.get_children())
+
+    def _clear_saved_kit_selection(self) -> None:
+        """Clear the saved-kit selection."""
+        self.saved_kit_tree.selection_remove(self.saved_kit_tree.selection())
+
+    def _set_dropbox_buttons_enabled(self, enabled: bool) -> None:
+        """Disable Dropbox buttons while one Dropbox task is running."""
+        state = "normal" if enabled else "disabled"
+        self.check_dropbox_button.configure(state=state)
+        self.publish_saved_kits_button.configure(state=state)
+
+    def _run_dropbox_task(
+        self,
+        *,
+        label: str,
+        fn: Callable[[], Any],
+        on_success: Callable[[Any], None],
+    ) -> None:
+        """Run one Dropbox task off the Tk main thread."""
+        if self._dropbox_task_thread and self._dropbox_task_thread.is_alive():
+            messagebox.showinfo("Dropbox Busy", "Another Dropbox task is still running.")
+            return
+
+        self._set_dropbox_buttons_enabled(False)
+
+        def worker() -> None:
+            try:
+                result = fn()
+            except Exception as exc:
+                self.after(0, lambda: self._on_dropbox_task_failed(label, exc))
+                return
+            self.after(0, lambda: self._on_dropbox_task_succeeded(label, result, on_success))
+
+        self._dropbox_task_thread = threading.Thread(target=worker, daemon=True)
+        self._dropbox_task_thread.start()
+
+    def _on_dropbox_task_failed(self, label: str, exc: Exception) -> None:
+        """Restore button state and show one Dropbox task failure."""
+        self._set_dropbox_buttons_enabled(True)
+        messagebox.showerror(f"{label} Failed", str(exc))
+
+    def _on_dropbox_task_succeeded(
+        self,
+        label: str,
+        result: Any,
+        on_success: Callable[[Any], None],
+    ) -> None:
+        """Restore button state after one Dropbox task succeeds."""
+        self._set_dropbox_buttons_enabled(True)
+        self._refresh_saved_kits_table()
+        on_success(result)
+
+    def _check_dropbox_access(self) -> None:
+        """Verify the Dropbox credentials loaded on this machine."""
+        self._run_dropbox_task(
+            label="Check Dropbox Access",
+            fn=verify_dropbox_access,
+            on_success=self._show_dropbox_access,
+        )
+
+    def _show_dropbox_access(self, result: dict[str, str]) -> None:
+        """Render the connected Dropbox account."""
+        messagebox.showinfo(
+            "Dropbox Access Ready",
+            f"Connected as:\n{result.get('display_name', '')}\n{result.get('email', '')}",
+        )
+
+    def _publish_selected_saved_kits(self, *, confirm: bool = True) -> None:
+        """Publish the selected saved kits to Dropbox."""
+        selected_items = self._selected_saved_kit_items()
+        if not selected_items:
+            messagebox.showinfo("No Kits Selected", "Select at least one saved kit before publishing.")
+            return
+        if confirm and not messagebox.askyesno(
+            "Publish Selected Kits",
+            f"Publish Dropbox kit links for {len(selected_items)} selected kit(s)?",
+        ):
+            return
+
+        default_out_root = self.out_root_var.get().strip() or "participant_kits"
+        self._run_dropbox_task(
+            label="Publish Selected Kits",
+            fn=lambda: publish_participant_kit_batch(
+                REPO_ROOT,
+                participants=selected_items,
+                default_out_root=default_out_root,
+            ),
+            on_success=self._show_saved_kit_publish_result,
+        )
+
+    def _show_saved_kit_publish_result(self, result: dict[str, Any]) -> None:
+        """Summarize one saved-kit Dropbox publish run."""
+        successes = result.get("successes", [])
+        failures = result.get("failures", [])
+        lines = [f"Published: {len(successes)}", f"Failed: {len(failures)}"]
+        if successes:
+            lines.append("")
+            for row in successes:
+                map_name = Path(str(row["researcher_map_path"])).stem
+                lines.append(f"{map_name}")
+                lines.append(f"Kit URL: {row['kit_shared_url']}")
+                lines.append(f"Submission URL: {row['submission_file_request_url']}")
+                lines.append("")
+        if failures:
+            lines.append("Failures:")
+            for row in failures:
+                lines.append(f"{row.get('phase', '')}/{row.get('participant_id', '')}: {row.get('error', '')}")
+        messagebox.showinfo("Dropbox Publish Complete", "\n".join(line for line in lines if line is not None).strip())
+
     def _create_kits(self) -> None:
         """Create kits for all previewed IDs after strict preflight checks."""
         try:
@@ -563,11 +813,16 @@ class KitBuilderGUI(tk.Tk):
                 raise FileExistsError("The following participant kit IDs already exist.\n\n" f"{listed}\n\n" "Change naming settings or enable overwrite.")
             created: list[str] = []
             for pid in participant_ids:
-                args = argparse.Namespace(participant_id=pid, condition=self.condition_var.get().strip(), phase=self.phase_var.get().strip(), metadata_csv=str(metadata_csv), expertise_areas=", ".join(self._selected_expertise_areas()), samples_per_hardness=int(self.samples_per_hardness_var.get()), selection_seed=int(self.selection_seed_var.get()), out_root=str(out_root), study_id=self.study_id_var.get().strip(), participant_os=PARTICIPANT_OS_LABEL_TO_VALUE.get(self.participant_os_var.get().strip(), self.participant_os_var.get().strip()), llm_provider=_normalize_provider(self.provider_var.get()), llm_model=self.model_var.get().strip(), llm_base_url=self.base_url_var.get().strip(), temperature=0.2, top_p=0.9, top_k=40, num_predict=1536, seed=42, overwrite=bool(self.overwrite_var.get()))
+                args = argparse.Namespace(participant_id=pid, condition=self.condition_var.get().strip(), phase=self.phase_var.get().strip(), metadata_csv=str(metadata_csv), expertise_areas=", ".join(self._selected_expertise_areas()), samples_per_hardness=int(self.samples_per_hardness_var.get()), selection_seed=int(self.selection_seed_var.get()), out_root=str(out_root), study_id=self.study_id_var.get().strip(), participant_os=PARTICIPANT_OS_LABEL_TO_VALUE.get(self.participant_os_var.get().strip(), self.participant_os_var.get().strip()), llm_provider=_normalize_provider(self.provider_var.get()), llm_model=self.model_var.get().strip(), llm_base_url=self.base_url_var.get().strip(), temperature=0.2, top_p=0.9, top_k=40, num_predict=1536, seed=42, dropbox_publish=bool(self.dropbox_publish_var.get()), overwrite=bool(self.overwrite_var.get()))
                 build_participant_kit(args)
                 created.append(pid)
             self._write_session_state()
-            messagebox.showinfo("Kits Created", "Created participant kits:\n\n" + "\n".join(created))
+            self._refresh_saved_kits_table(select_participant_ids=created)
+            prompt = "Created participant kits:\n\n" + "\n".join(created)
+            if self.dropbox_publish_var.get():
+                messagebox.showinfo("Kits Created", prompt + "\n\nDropbox publish was enabled during kit creation.")
+            elif messagebox.askyesno("Kits Created", prompt + "\n\nPublish these kits to Dropbox now?"):
+                self._publish_selected_saved_kits(confirm=False)
         except Exception as exc:
             messagebox.showerror("Creation Failed", str(exc))
 

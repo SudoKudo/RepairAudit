@@ -156,6 +156,102 @@ class DropboxWorkflowTests(unittest.TestCase):
             self.assertEqual(result["successes"][0]["kit_shared_url"], "https://example.test/kit")
             self.assertEqual(len(result["failures"]), 1)
             self.assertEqual(result["failures"][0]["participant_id"], "P002")
+            self.assertTrue(Path(result["report_text_path"]).exists())
+            self.assertTrue(Path(result["report_csv_path"]).exists())
+            self.assertEqual(Path(result["report_text_path"]).name, "dropbox_publish_latest.txt")
+            self.assertEqual(Path(result["report_csv_path"]).name, "dropbox_publish_registry.csv")
+            summary_text = Path(result["report_text_path"]).read_text(encoding="utf-8")
+            self.assertIn("Kit URL: https://example.test/kit", summary_text)
+            self.assertIn("Submission URL: https://example.test/request", summary_text)
+
+    def test_write_publish_summary_artifacts_creates_latest_text_and_registry_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo_root = Path(tmp_dir)
+            result = {
+                "successes": [
+                    {
+                        "participant_id": "P001",
+                        "phase": "pilot",
+                        "published_utc": "2026-07-16T14:30:00+00:00",
+                        "researcher_map_path": "participant_kits/_researcher_maps/pilot__P001.json",
+                        "share_zip_path": "participant_kits/_share_zips/participant_kit_pilot_P001.zip",
+                        "kit_dropbox_path": "/RepairAudit/kits/P001/participant_kit_pilot_P001.zip",
+                        "kit_shared_url": "https://example.test/kit",
+                        "submission_folder_path": "/RepairAudit/submissions/P001",
+                        "submission_file_request_url": "https://example.test/request",
+                    }
+                ],
+                "failures": [
+                    {
+                        "participant_id": "P002",
+                        "phase": "pilot",
+                        "error": "Share ZIP not found",
+                    }
+                ],
+            }
+
+            artifacts = dropbox_workflow.write_publish_summary_artifacts(repo_root, result)
+
+            text_path = Path(artifacts["report_text_path"])
+            csv_path = Path(artifacts["report_csv_path"])
+            self.assertTrue(text_path.exists())
+            self.assertTrue(csv_path.exists())
+            self.assertEqual(text_path.name, "dropbox_publish_latest.txt")
+            self.assertEqual(csv_path.name, "dropbox_publish_registry.csv")
+            self.assertIn("Dropbox publish summary", artifacts["summary_text"])
+            self.assertIn("Published kits", text_path.read_text(encoding="utf-8"))
+            csv_text = csv_path.read_text(encoding="utf-8")
+            self.assertIn("phase,participant_id", csv_text)
+            self.assertIn("P001", csv_text)
+            self.assertNotIn("P002", csv_text)
+
+    def test_write_publish_summary_artifacts_updates_existing_registry_row(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo_root = Path(tmp_dir)
+            first = {
+                "successes": [
+                    {
+                        "participant_id": "P001",
+                        "phase": "pilot",
+                        "published_utc": "2026-07-16T14:30:00+00:00",
+                        "researcher_map_path": "participant_kits/_researcher_maps/pilot__P001.json",
+                        "share_zip_path": "participant_kits/_share_zips/participant_kit_pilot_P001.zip",
+                        "kit_dropbox_path": "/RepairAudit/kits/P001/participant_kit_pilot_P001.zip",
+                        "kit_shared_url": "https://example.test/kit-v1",
+                        "submission_folder_path": "/RepairAudit/submissions/P001",
+                        "submission_file_request_id": "fr_001",
+                        "submission_file_request_url": "https://example.test/request-v1",
+                    }
+                ],
+                "failures": [],
+            }
+            second = {
+                "successes": [
+                    {
+                        "participant_id": "P001",
+                        "phase": "pilot",
+                        "published_utc": "2026-07-16T15:00:00+00:00",
+                        "researcher_map_path": "participant_kits/_researcher_maps/pilot__P001.json",
+                        "share_zip_path": "participant_kits/_share_zips/participant_kit_pilot_P001.zip",
+                        "kit_dropbox_path": "/RepairAudit/kits/P001/participant_kit_pilot_P001.zip",
+                        "kit_shared_url": "https://example.test/kit-v2",
+                        "submission_folder_path": "/RepairAudit/submissions/P001",
+                        "submission_file_request_id": "fr_002",
+                        "submission_file_request_url": "https://example.test/request-v2",
+                    }
+                ],
+                "failures": [],
+            }
+
+            dropbox_workflow.write_publish_summary_artifacts(repo_root, first)
+            artifacts = dropbox_workflow.write_publish_summary_artifacts(repo_root, second)
+
+            csv_path = Path(artifacts["report_csv_path"])
+            rows = csv_path.read_text(encoding="utf-8").strip().splitlines()
+            self.assertEqual(len(rows), 2)
+            self.assertIn("https://example.test/kit-v2", rows[1])
+            self.assertIn("https://example.test/request-v2", rows[1])
+            self.assertNotIn("https://example.test/kit-v1", rows[1])
 
     def test_import_participant_submissions_batch_collects_successes_and_failures(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

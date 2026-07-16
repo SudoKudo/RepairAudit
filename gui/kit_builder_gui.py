@@ -476,7 +476,7 @@ class KitBuilderGUI(tk.Tk):
         self.preview_box.configure(state="disabled")
 
         actions = ttk.Frame(root, style="Root.TFrame")
-        actions.grid(row=5, column=0, sticky="ew", pady=(10, 0))
+        actions.grid(row=4, column=0, sticky="ew", pady=(10, 0))
         actions.columnconfigure(0, weight=1)
 
         ttk.Label(actions, text="Refresh the preview before creating kits. Existing folders are blocked unless overwrite is enabled.", style="Hint.TLabel", wraplength=760, justify="left").grid(row=0, column=0, sticky="w")
@@ -489,7 +489,7 @@ class KitBuilderGUI(tk.Tk):
         ttk.Button(button_bar, text="Create Kits", command=self._create_kits, style="Primary.TButton").grid(row=0, column=1, padx=(6, 0), sticky="ew")
 
         saved_kits = ttk.LabelFrame(root, text="Saved Kits", style="Card.TLabelframe", padding=12)
-        saved_kits.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        saved_kits.grid(row=5, column=0, sticky="ew", pady=(8, 0))
         saved_kits.columnconfigure(0, weight=1)
         saved_kits.rowconfigure(2, weight=1)
 
@@ -784,20 +784,44 @@ class KitBuilderGUI(tk.Tk):
         """Summarize one saved-kit Dropbox publish run."""
         successes = result.get("successes", [])
         failures = result.get("failures", [])
-        lines = [f"Published: {len(successes)}", f"Failed: {len(failures)}"]
-        if successes:
-            lines.append("")
-            for row in successes:
-                map_name = Path(str(row["researcher_map_path"])).stem
-                lines.append(f"{map_name}")
-                lines.append(f"Kit URL: {row['kit_shared_url']}")
-                lines.append(f"Submission URL: {row['submission_file_request_url']}")
-                lines.append("")
+        summary_text = str(result.get("summary_text") or "").strip()
+        clipboard_ready = False
+        if summary_text:
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(summary_text)
+                self.update_idletasks()
+                clipboard_ready = True
+            except Exception:
+                clipboard_ready = False
+
+        lines = [
+            "Dropbox publish finished.",
+            "",
+            f"Published: {len(successes)}",
+            f"Failed: {len(failures)}",
+        ]
+
+        report_text_path = _clean_text(result.get("report_text_path"))
+        report_csv_path = _clean_text(result.get("report_csv_path"))
+        if report_text_path:
+            lines.extend(["", f"Copy-ready text summary: {report_text_path}"])
+        if report_csv_path:
+            lines.append(f"CSV link log: {report_csv_path}")
+        if clipboard_ready:
+            lines.append("Summary text was copied to the clipboard.")
+
+        report_write_error = _clean_text(result.get("report_write_error"))
+        if report_write_error:
+            lines.extend(["", f"Could not write the local summary files: {report_write_error}"])
+
         if failures:
+            lines.append("")
             lines.append("Failures:")
             for row in failures:
                 lines.append(f"{row.get('phase', '')}/{row.get('participant_id', '')}: {row.get('error', '')}")
-        messagebox.showinfo("Dropbox Publish Complete", "\n".join(line for line in lines if line is not None).strip())
+
+        messagebox.showinfo("Dropbox Publish Complete", "\n".join(lines).strip())
 
     def _create_kits(self) -> None:
         """Create kits for all previewed IDs after strict preflight checks."""

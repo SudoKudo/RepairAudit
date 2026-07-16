@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -22,6 +23,21 @@ def _resolve_under_repo(repo_root: Path, value: str | Path) -> Path:
     """Resolve a path relative to the repo root when needed."""
     raw = Path(value)
     return raw if raw.is_absolute() else (repo_root / raw)
+
+
+def publish_log_root(repo_root: Path) -> Path:
+    """Return the local folder used for copyable Dropbox publish summaries."""
+    return repo_root / "participant_kits" / "_researcher_maps" / "_dropbox_publish"
+
+
+def publish_latest_text_path(repo_root: Path) -> Path:
+    """Return the stable text summary path for the latest Dropbox publish run."""
+    return publish_log_root(repo_root) / "dropbox_publish_latest.txt"
+
+
+def publish_registry_csv_path(repo_root: Path) -> Path:
+    """Return the stable CSV registry path for the latest known publish links."""
+    return publish_log_root(repo_root) / "dropbox_publish_registry.csv"
 
 
 def researcher_map_path(repo_root: Path, *, phase: str, participant_id: str) -> Path:
@@ -125,6 +141,124 @@ def verify_dropbox_access() -> dict[str, str]:
     }
 
 
+def _publish_result_summary_text(result: dict[str, Any]) -> str:
+    """Render a plain-text publish summary suitable for email or lab notes."""
+    successes = result.get("successes", [])
+    failures = result.get("failures", [])
+    lines = [
+        "Dropbox publish summary",
+        f"Published: {len(successes)}",
+        f"Failed: {len(failures)}",
+        "",
+    ]
+    if successes:
+        lines.append("Published kits")
+        for row in successes:
+            participant_id = str(row.get("participant_id") or "").strip()
+            phase = str(row.get("phase") or "").strip()
+            lines.append(f"- {phase}/{participant_id}")
+            lines.append(f"  Kit URL: {row.get('kit_shared_url', '')}")
+            lines.append(f"  Submission URL: {row.get('submission_file_request_url', '')}")
+            lines.append(f"  Dropbox ZIP Path: {row.get('kit_dropbox_path', '')}")
+            lines.append(f"  Dropbox Submission Folder: {row.get('submission_folder_path', '')}")
+            lines.append("")
+    if failures:
+        lines.append("Failures")
+        for row in failures:
+            participant_id = str(row.get("participant_id") or "").strip() or "<missing>"
+            phase = str(row.get("phase") or "").strip() or "<missing>"
+            lines.append(f"- {phase}/{participant_id}: {row.get('error', '')}")
+    return "\n".join(lines).strip()
+
+
+def _publish_registry_fieldnames() -> list[str]:
+    """Return the CSV header used for the stable Dropbox publish registry."""
+    return [
+        "phase",
+        "participant_id",
+        "published_utc",
+        "researcher_map_path",
+        "share_zip_path",
+        "kit_dropbox_path",
+        "kit_shared_url",
+        "submission_folder_path",
+        "submission_file_request_id",
+        "submission_file_request_url",
+    ]
+
+
+def _read_publish_registry(csv_path: Path) -> dict[tuple[str, str], dict[str, str]]:
+    """Load the stable publish registry keyed by phase and participant ID."""
+    rows: dict[tuple[str, str], dict[str, str]] = {}
+    if not csv_path.exists():
+        return rows
+
+    try:
+        with csv_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                phase = str(row.get("phase", "") or "").strip()
+                participant_id = str(row.get("participant_id", "") or "").strip()
+                if not phase or not participant_id:
+                    continue
+                rows[(phase, participant_id)] = {
+                    field: str(row.get(field, "") or "")
+                    for field in _publish_registry_fieldnames()
+                }
+    except Exception:
+        return {}
+
+    return rows
+
+
+def _write_publish_registry(csv_path: Path, rows: dict[tuple[str, str], dict[str, str]]) -> None:
+    """Write the stable publish registry sorted by phase and participant ID."""
+    fieldnames = _publish_registry_fieldnames()
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for key in sorted(rows):
+            row = rows[key]
+            writer.writerow({field: row.get(field, "") for field in fieldnames})
+
+
+def write_publish_summary_artifacts(repo_root: Path, result: dict[str, Any]) -> dict[str, str]:
+    """Write a stable latest-summary text file and update the publish registry CSV."""
+    output_root = publish_log_root(repo_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    text_path = publish_latest_text_path(repo_root)
+    csv_path = publish_registry_csv_path(repo_root)
+    summary_text = _publish_result_summary_text(result)
+    text_path.write_text(summary_text + "\n", encoding="utf-8")
+
+    registry_rows = _read_publish_registry(csv_path)
+    for row in result.get("successes", []):
+        phase = str(row.get("phase", "") or "").strip()
+        participant_id = str(row.get("participant_id", "") or "").strip()
+        if not phase or not participant_id:
+            continue
+        registry_rows[(phase, participant_id)] = {
+            "phase": phase,
+            "participant_id": participant_id,
+            "published_utc": str(row.get("published_utc", "") or ""),
+            "researcher_map_path": str(row.get("researcher_map_path", "") or ""),
+            "share_zip_path": str(row.get("share_zip_path", "") or ""),
+            "kit_dropbox_path": str(row.get("kit_dropbox_path", "") or ""),
+            "kit_shared_url": str(row.get("kit_shared_url", "") or ""),
+            "submission_folder_path": str(row.get("submission_folder_path", "") or ""),
+            "submission_file_request_id": str(row.get("submission_file_request_id", "") or ""),
+            "submission_file_request_url": str(row.get("submission_file_request_url", "") or ""),
+        }
+    _write_publish_registry(csv_path, registry_rows)
+
+    return {
+        "summary_text": summary_text,
+        "report_text_path": str(text_path),
+        "report_csv_path": str(csv_path),
+    }
+
+
 def publish_share_zip_artifacts(*, participant_id: str, share_zip_path: Path) -> dict[str, Any]:
     """Upload one share ZIP and return the Dropbox links used by the researcher tools."""
     pid = participant_id.strip()
@@ -220,10 +354,16 @@ def publish_participant_kit_batch(
             continue
         successes.append(result)
 
-    return {
+    result = {
         "successes": successes,
         "failures": failures,
     }
+    try:
+        result.update(write_publish_summary_artifacts(repo_root, result))
+    except Exception as exc:
+        result["summary_text"] = _publish_result_summary_text(result)
+        result["report_write_error"] = str(exc)
+    return result
 
 
 def import_participant_submissions_batch(

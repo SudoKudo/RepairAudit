@@ -947,7 +947,13 @@ body{margin:0;min-height:100vh;background:linear-gradient(180deg,#f9fbff 0%,#eff
 .snip{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border:1px solid #d8e6ff;border-radius:10px;background:#fff;cursor:pointer}
 .snip.active{border-color:#7fb0ff;background:#f2f8ff}
 .tag{font-size:11px;padding:3px 7px;border-radius:999px;background:#ecf3ff;color:#2c558f}
-.readme{max-height:220px;overflow:auto;white-space:pre-wrap;font-size:13px;color:#334f76;border:1px solid #e1ebff;border-radius:10px;padding:9px;background:#fbfdff}
+.readme{max-height:220px;overflow:auto;font-size:13px;line-height:1.45;color:#334f76;border:1px solid #e1ebff;border-radius:10px;padding:10px 11px;background:#fbfdff}
+.readme .guideintro{margin:0 0 10px;color:#214c8e;font-weight:700}
+.readme h4{margin:0 0 6px;color:#214c8e;font-size:13px}
+.readme p{margin:0 0 10px}
+.readme ul{margin:0 0 10px 18px;padding:0}
+.readme li{margin:0 0 6px}
+.readme .guidenotice{margin-top:8px;padding:9px 11px;border:1px solid #ffd4c2;background:#fff5f0;border-radius:10px;color:#8a3f20;font-size:12px;font-weight:700}
 textarea,input{width:100%;border:1px solid #ccddff;border-radius:10px;padding:8px 10px;background:#fff;color:var(--text)}
 textarea{font-family:Consolas,monospace;font-size:13px;min-height:220px;line-height:1.5;tab-size:4}
 #baseline_code{border:1px solid #ccddff;border-radius:10px;background:#f8fbff;min-height:170px;max-height:360px;overflow:auto;font-family:Consolas,monospace;font-size:13px;line-height:1.5;tab-size:4}
@@ -1090,7 +1096,7 @@ select:focus{
         </div>
         <div><label class="lbl" title="Main prompting approach used for this snippet.">Primary Strategy</label><select id="strategy_primary" title="Choose the main prompt strategy you used for this snippet."><option value="">Select...</option><option value="zero_shot">Zero-Shot</option><option value="few_shot">Few-Shot</option><option value="chain_of_thought">Chain-of-Thought</option><option value="adaptive_chain_of_thought">Adaptive Chain-of-Thought</option><option value="other">Other</option></select></div>
         <div class="full" id="strategyOtherWrap" style="display:none"><label class="lbl" title="Describe the strategy you used when Other is selected.">Other Strategy</label><input id="strategy_other_text" placeholder="brief strategy label or description" title="Required when Primary Strategy is Other." /></div>
-        <div><label class="lbl" title="Your confidence that the final snippet is secure.">Confidence (1-5)</label><select id="confidence_1to5" title="1 = low confidence, 5 = high confidence."><option value="">Select...</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></div>
+        <div><label class="lbl" title="How confident you are that your final submitted code is secure.">Confidence (1-5)</label><select id="confidence_1to5" title="Rate how confident you are that your final submitted code is secure. 1 = low confidence, 5 = high confidence."><option value="">Select...</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></div>
         <div class="full"><label class="lbl" title="Optional factual notes about your process for this snippet.">Notes</label><input id="notes" placeholder="optional notes" title="Optional. Avoid personal or sensitive information." /></div>
       </div>
 
@@ -1814,42 +1820,38 @@ function updateStrategyOtherField(){
 
 function buildInAppGuide(data){
   return [
-    "Quick Reference",
-    "- Use the Onboarding button any time you need to reopen the instructions or participant profile.",
-    "- The Baseline pane is reference-only. Only Final Submitted Code is exported.",
-    "- Click one baseline line, then another, to mark a range. Use Copy Marked Lines when you only want part of the file.",
-    "- Each snippet may or may not be vulnerable. Use the chat however you normally would to inspect or discuss it.",
-    "- If a snippet is long, send only the relevant function or block instead of the whole file.",
-    "- Save each snippet summary and final code before moving to the next one. When everything is done, click Finish (Build ZIP).",
-    "",
-    "Assistant Rules",
-    "- Use the assistant that comes with this kit.",
-    "- Each snippet must include at least one in-app LLM turn.",
-    "- A turn is one logged message in the current snippet chat.",
-    "- Do not send study code to outside assistants or web services unless the research team told you to.",
-    "",
-    "Snippet Summary",
-    "- Tip: hover over labels and buttons in the app if you need the field description.",
-    "- Applied Turns: non-negative integer, must be <= total logged turns. Count only assistant turns that changed your final code.",
-    "- Primary Strategy: pick the main prompt style you used for this snippet. If you choose Other, add a short note.",
-    "- Confidence: choose a value from 1 to 5.",
-    "- Notes: optional short factual notes.",
-    "",
-    "Recorded Automatically",
-    "- Tool/provider and model",
-    "- Total turns",
-    "- First and final prompts",
-    "- Full chat transcript per snippet",
-    "- Session timer (resume-aware)",
-    "",
-    "If The Assistant Stalls",
-    "- Larger pasted code blocks can take longer to answer.",
-    "- Retry once with a narrower question or code block.",
-    "- If it still fails, keep your current code changes and continue.",
-    "",
-    "Privacy Reminder",
-    "- Do not include personal identifiers or sensitive account data."
-  ].join("\\n");
+    "<div class='guideintro'>Quick reference for the app on this page.</div>",
+    "<h4>Using This App</h4>",
+    "<ul>",
+    "<li>Use <strong>Show Onboarding</strong> any time you need to reopen the instructions or participant profile.</li>",
+    "<li>The <strong>Baseline</strong> pane is reference-only. Only <strong>Final Submitted Code</strong> is exported.</li>",
+    "<li>Click one baseline line, then another, to mark a range. Use <strong>Copy Marked Lines</strong> when you only want part of the file.</li>",
+    "<li>Each snippet may or may not be vulnerable. Use the chat however you normally would to inspect or discuss it.</li>",
+    "<li>If a snippet is long, send only the relevant function or block instead of the whole file.</li>",
+    "<li>Save each snippet summary and final code before moving to the next one. When everything is done, click <strong>Finish (Build ZIP)</strong>.</li>",
+    "</ul>",
+    "<h4>Assistant Rules</h4>",
+    "<ul>",
+    "<li>Use the assistant that comes with this kit.</li>",
+    "<li>Each snippet must include at least one in-app LLM turn.</li>",
+    "<li>A turn is one logged message in the current snippet chat.</li>",
+    "<li>Do not send study code to outside assistants or web services unless the research team told you to.</li>",
+    "</ul>",
+    "<h4>Snippet Summary</h4>",
+    "<ul>",
+    "<li><strong>Applied Turns</strong>: non-negative integer, must be less than or equal to total logged turns. Count only assistant turns that changed your final code.</li>",
+    "<li><strong>Primary Strategy</strong>: pick the main prompt style you used for this snippet. If you choose <strong>Other</strong>, add a short note.</li>",
+    "<li><strong>Confidence</strong>: choose a value from 1 to 5 based on how confident you are that your final submitted code is secure.</li>",
+    "<li><strong>Notes</strong>: optional short factual notes.</li>",
+    "</ul>",
+    "<h4>If The Assistant Stalls</h4>",
+    "<ul>",
+    "<li>Larger pasted code blocks can take longer to answer.</li>",
+    "<li>Retry once with a narrower question or code block.</li>",
+    "<li>If it still fails, keep your current code changes and continue.</li>",
+    "</ul>",
+    "<div class='guidenotice'>PRIVACY REMINDER: DO NOT INCLUDE PERSONAL IDENTIFIERS OR SENSITIVE ACCOUNT DATA.</div>"
+  ].join("");
 }
 
 function setChatTurnBadge(turns){
@@ -2392,7 +2394,7 @@ function refreshState(cb){
       meta.textContent = "Assigned snippets loaded. Use Onboarding for instructions.";
     }
     var readme = byId("readme");
-    if(readme){ readme.textContent = buildInAppGuide(d); }
+    if(readme){ readme.innerHTML = buildInAppGuide(d); }
     var t = d.timer || {};
     updateTimerBase(Number(t.active_display_seconds || t.active_seconds || 0));
     renderLiveTimer();

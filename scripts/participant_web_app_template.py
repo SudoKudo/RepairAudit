@@ -7,6 +7,7 @@ import json
 import os
 import secrets
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -15,7 +16,6 @@ import time
 import webbrowser
 from datetime import datetime, timezone
 from http import HTTPStatus
-from http.client import HTTPConnection, HTTPSConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -2319,6 +2319,13 @@ function formatChatFailure(msg){
   if(lower.indexOf("timed out") !== -1 || lower.indexOf("timeout") !== -1){
     return "The assigned LLM timed out before returning a response. Retry once or shorten the request.";
   }
+  if(
+    lower.indexOf("secure connection") !== -1 ||
+    lower.indexOf("certificate") !== -1 ||
+    (lower.indexOf("ssl") !== -1 && lower.indexOf("handshake") !== -1)
+  ){
+    return "Could not establish the assigned HTTPS LLM connection. Confirm the assigned tunnel URL is still active, then retry.";
+  }
   if(lower.indexOf("connection") !== -1 || lower.indexOf("refused") !== -1 || lower.indexOf("unavailable") !== -1){
     return "Could not reach the assigned LLM endpoint. Confirm it is available, then retry.";
   }
@@ -3164,6 +3171,22 @@ class AppHandler(BaseHTTPRequestHandler):
             raise RuntimeError("LLM endpoint returned unexpected response format.")
         return obj
 
+    def _llm_transport_error(self, exc: Exception) -> RuntimeError:
+        """Normalize lower-level endpoint transport failures to one participant-facing message."""
+        detail = str(exc).strip()
+        lower = detail.lower()
+        if "ssl" in lower and "handshake" in lower:
+            return RuntimeError(
+                "Could not establish a secure connection to the configured LLM endpoint. "
+                "Confirm the assigned HTTPS tunnel is still active, then try again."
+            )
+        if "certificate verify failed" in lower:
+            return RuntimeError(
+                "Could not verify the configured LLM endpoint certificate. "
+                "Confirm the assigned HTTPS tunnel URL is still valid, then try again."
+            )
+        return RuntimeError(f"Could not reach the configured LLM endpoint at {self._ollama_base_url()} ({exc}).")
+
     def _ollama_base_url(self) -> str:
         """Return the configured participant-side Ollama-compatible endpoint base URL."""
         llm = self.store.lock_data.get("llm", {})
@@ -3223,27 +3246,39 @@ class AppHandler(BaseHTTPRequestHandler):
     ) -> dict[str, object]:
         """Stream one Ollama chat reply internally so the upstream request can be cancelled."""
         url = self._ollama_url(path)
-        parsed = urlparse(url)
-        scheme = (parsed.scheme or "http").lower()
-        connection_cls = HTTPSConnection if scheme == "https" else HTTPConnection
-        host = parsed.hostname or ""
-        port = parsed.port or (443 if scheme == "https" else 80)
-        request_path = parsed.path or "/"
-        if parsed.query:
-            request_path += "?" + parsed.query
-
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/x-ndjson, application/json",
             "ngrok-skip-browser-warning": "true",
         }
         body = json.dumps(payload).encode("utf-8")
-        conn = connection_cls(host, port, timeout=timeout)
+        req = Request(url=url, data=body, headers=headers, method="POST")
+        resp = None
 
         try:
-            conn.request("POST", request_path, body=body, headers=headers)
-            resp = conn.getresponse()
-            if resp.status < 200 or resp.status >= 300:
+            resp = urlopen(req, timeout=timeout)
+        except HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            detail = raw.strip()
+            try:
+                parsed_error = json.loads(raw)
+                if isinstance(parsed_error, dict):
+                    detail = str(parsed_error.get("error") or parsed_error.get("message") or detail).strip()
+            except Exception:
+                pass
+            if detail:
+                raise RuntimeError(f"LLM endpoint rejected the request ({exc.code}): {detail}") from exc
+            raise RuntimeError(f"LLM endpoint rejected the request ({exc.code}).") from exc
+        except URLError as exc:
+            raise self._llm_transport_error(exc) from exc
+        except ssl.SSLError as exc:
+            raise self._llm_transport_error(exc) from exc
+        except Exception as exc:
+            raise RuntimeError(f"LLM request failed: {exc}") from exc
+
+        try:
+            status = int(getattr(resp, "status", 200) or 200)
+            if status < 200 or status >= 300:
                 raw = resp.read().decode("utf-8", errors="replace")
                 detail = raw.strip()
                 try:
@@ -3253,8 +3288,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
                 if detail:
-                    raise RuntimeError(f"LLM endpoint rejected the request ({resp.status}): {detail}")
-                raise RuntimeError(f"LLM endpoint rejected the request ({resp.status}).")
+                    raise RuntimeError(f"LLM endpoint rejected the request ({status}): {detail}")
+                raise RuntimeError(f"LLM endpoint rejected the request ({status}).")
 
             try:
                 raw_socket = getattr(getattr(resp, "fp", None), "raw", None)
@@ -3314,9 +3349,9 @@ class AppHandler(BaseHTTPRequestHandler):
         except OllamaChatCancelled:
             raise
         except URLError as exc:
-            raise RuntimeError(
-                f"Could not reach the configured LLM endpoint at {self._ollama_base_url()} ({exc})."
-            ) from exc
+            raise self._llm_transport_error(exc) from exc
+        except ssl.SSLError as exc:
+            raise self._llm_transport_error(exc) from exc
         except socket.timeout as exc:
             raise RuntimeError("LLM streaming request timed out.") from exc
         except Exception as exc:
@@ -3325,7 +3360,8 @@ class AppHandler(BaseHTTPRequestHandler):
             raise RuntimeError(f"LLM request failed: {exc}") from exc
         finally:
             try:
-                conn.close()
+                if resp is not None:
+                    resp.close()
             except Exception:
                 pass
 

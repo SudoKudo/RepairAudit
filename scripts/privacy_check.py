@@ -336,7 +336,7 @@ def _print_report(ok: bool, findings: list[Finding], mode: str) -> None:
 def main() -> None:
     """CLI entrypoint for one-command pre-publish privacy checks."""
     ap = argparse.ArgumentParser(description="Pre-publish privacy/safety checker.")
-    ap.add_argument("--repo_root", default=".", help="Repository root to scan.")
+    ap.add_argument("--repo_root", "--repo-root", dest="repo_root", default=".", help="Repository root to scan.")
     args = ap.parse_args()
 
     ok, findings, mode = run_prepublish_check(Path(args.repo_root))

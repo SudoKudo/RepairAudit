@@ -190,21 +190,8 @@ class ParticipantWebAppTemplateTests(unittest.TestCase):
             def read(self) -> bytes:
                 return b""
 
-        class FakeConnection:
-            def __init__(self, *_args: object, **_kwargs: object) -> None:
-                self.response = FakeResponse()
-
-            def request(self, *_args: object, **_kwargs: object) -> None:
-                return None
-
-            def getresponse(self) -> FakeResponse:
-                return self.response
-
-            def close(self) -> None:
-                return None
-
         handler = self._make_handler()
-        with patch.object(participant_web_app, "HTTPConnection", FakeConnection):
+        with patch.object(participant_web_app, "urlopen", return_value=FakeResponse()):
             resp = handler._ollama_stream_chat(  # type: ignore[attr-defined]
                 "/api/chat",
                 {"model": "qwen3.6:27b", "messages": [], "stream": True},
@@ -241,21 +228,8 @@ class ParticipantWebAppTemplateTests(unittest.TestCase):
             def read(self) -> bytes:
                 return b""
 
-        class FakeConnection:
-            def __init__(self, *_args: object, **_kwargs: object) -> None:
-                self.response = FakeResponse()
-
-            def request(self, *_args: object, **_kwargs: object) -> None:
-                return None
-
-            def getresponse(self) -> FakeResponse:
-                return self.response
-
-            def close(self) -> None:
-                return None
-
         handler = self._make_handler()
-        with patch.object(participant_web_app, "HTTPConnection", FakeConnection):
+        with patch.object(participant_web_app, "urlopen", return_value=FakeResponse()):
             with patch.object(
                 participant_web_app.AppHandler,
                 "consume_chat_request_cancelled",

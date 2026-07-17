@@ -3,7 +3,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from scripts import privacy_check
 from scripts.privacy_check import _scan_secret_patterns
 
 
@@ -21,6 +23,17 @@ class PrivacyCheckTests(unittest.TestCase):
             self.assertEqual(len(findings), 1)
             self.assertEqual(findings[0].path, "Example.java")
             self.assertEqual(findings[0].category, "secret_pattern")
+
+    def test_main_accepts_hyphenated_repo_root_flag(self) -> None:
+        with patch.object(privacy_check, "run_prepublish_check", return_value=(True, [], "workspace-scan")) as run_check:
+            with patch.object(privacy_check, "_print_report") as print_report:
+                with patch("sys.argv", ["privacy_check.py", "--repo-root", "sample-root"]):
+                    with self.assertRaises(SystemExit) as exc:
+                        privacy_check.main()
+
+        self.assertEqual(exc.exception.code, 0)
+        self.assertEqual(run_check.call_args[0][0], Path("sample-root"))
+        print_report.assert_called_once()
 
 
 if __name__ == "__main__":

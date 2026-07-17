@@ -305,8 +305,10 @@ def publish_existing_participant_kit(
     write_researcher_map(map_path, payload)
 
     return {
+        "participant_id": pid,
+        "phase": phase,
         "researcher_map_path": map_path,
-        "share_zip_path": zip_path,
+        "share_zip_path": str(zip_path),
         **dropbox_payload,
     }
 

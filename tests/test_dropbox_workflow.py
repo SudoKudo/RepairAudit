@@ -95,6 +95,9 @@ class DropboxWorkflowTests(unittest.TestCase):
                         )
 
             payload = json.loads(map_path.read_text(encoding="utf-8"))
+            self.assertEqual(result["participant_id"], "P001")
+            self.assertEqual(result["phase"], "pilot")
+            self.assertEqual(result["share_zip_path"], str(share_zip))
             self.assertEqual(result["kit_shared_url"], "https://example.test/kit")
             self.assertIn("dropbox", payload)
             self.assertEqual(payload["dropbox"]["submission_file_request_url"], "https://example.test/request")

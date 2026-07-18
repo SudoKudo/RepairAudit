@@ -2322,7 +2322,12 @@ function formatChatFailure(msg){
   if(
     lower.indexOf("secure connection") !== -1 ||
     lower.indexOf("certificate") !== -1 ||
-    (lower.indexOf("ssl") !== -1 && lower.indexOf("handshake") !== -1)
+    lower.indexOf("record layer failure") !== -1 ||
+    lower.indexOf("tls") !== -1 ||
+    (lower.indexOf("ssl") !== -1 && (
+      lower.indexOf("handshake") !== -1 ||
+      lower.indexOf("error") !== -1
+    ))
   ){
     return "Could not establish the assigned HTTPS LLM connection. Confirm the assigned tunnel URL is still active, then retry.";
   }
@@ -3141,7 +3146,7 @@ class AppHandler(BaseHTTPRequestHandler):
 
         req = Request(url=url, data=data, headers=headers, method=method)
         try:
-            with urlopen(req, timeout=timeout) as resp:
+            with self._open_llm_request(req, timeout=timeout) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
         except HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace")
@@ -3156,9 +3161,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 raise RuntimeError(f"LLM endpoint rejected the request ({exc.code}): {detail}") from exc
             raise RuntimeError(f"LLM endpoint rejected the request ({exc.code}).") from exc
         except URLError as exc:
-            raise RuntimeError(
-                f"Could not reach the configured LLM endpoint at {self._ollama_base_url()} ({exc})."
-            ) from exc
+            raise self._llm_transport_error(exc) from exc
+        except ssl.SSLError as exc:
+            raise self._llm_transport_error(exc) from exc
         except Exception as exc:
             raise RuntimeError(f"LLM request failed: {exc}") from exc
 
@@ -3171,21 +3176,56 @@ class AppHandler(BaseHTTPRequestHandler):
             raise RuntimeError("LLM endpoint returned unexpected response format.")
         return obj
 
+    def _is_tls_transport_issue(self, detail: str) -> bool:
+        """Return True when a transport failure came from TLS/SSL setup rather than the model API."""
+        lower = detail.strip().lower()
+        if "certificate verify failed" in lower:
+            return True
+        if "ssl" in lower or "tls" in lower:
+            return True
+        tls_markers = [
+            "record layer failure",
+            "wrong version number",
+            "unexpected eof while reading",
+            "eof occurred in violation of protocol",
+        ]
+        return any(marker in lower for marker in tls_markers)
+
+    def _open_llm_request(self, req: Request, *, timeout: float):
+        """Open one LLM HTTP request, retrying once when the HTTPS tunnel fails during TLS setup."""
+        for attempt in range(2):
+            try:
+                return urlopen(req, timeout=timeout)
+            except HTTPError:
+                raise
+            except (URLError, ssl.SSLError) as exc:
+                if attempt == 0 and self._is_tls_transport_issue(str(exc)):
+                    time.sleep(0.5)
+                    continue
+                raise
+
     def _llm_transport_error(self, exc: Exception) -> RuntimeError:
         """Normalize lower-level endpoint transport failures to one participant-facing message."""
         detail = str(exc).strip()
         lower = detail.lower()
-        if "ssl" in lower and "handshake" in lower:
-            return RuntimeError(
-                "Could not establish a secure connection to the configured LLM endpoint. "
-                "Confirm the assigned HTTPS tunnel is still active, then try again."
-            )
         if "certificate verify failed" in lower:
             return RuntimeError(
                 "Could not verify the configured LLM endpoint certificate. "
                 "Confirm the assigned HTTPS tunnel URL is still valid, then try again."
             )
+        if self._is_tls_transport_issue(detail):
+            return RuntimeError(
+                "Could not establish a secure connection to the configured LLM endpoint. "
+                "Confirm the assigned HTTPS tunnel is still active, then try again."
+            )
         return RuntimeError(f"Could not reach the configured LLM endpoint at {self._ollama_base_url()} ({exc}).")
+
+    def _is_stream_poll_timeout(self, exc: Exception) -> bool:
+        """Return True when streamed readline polling hit a socket/buffer timeout and the request can keep waiting."""
+        if isinstance(exc, socket.timeout):
+            return True
+        lower = str(exc).strip().lower()
+        return "timed out object" in lower or lower == "timed out"
 
     def _ollama_base_url(self) -> str:
         """Return the configured participant-side Ollama-compatible endpoint base URL."""
@@ -3256,7 +3296,7 @@ class AppHandler(BaseHTTPRequestHandler):
         resp = None
 
         try:
-            resp = urlopen(req, timeout=timeout)
+            resp = self._open_llm_request(req, timeout=timeout)
         except HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace")
             detail = raw.strip()
@@ -3307,8 +3347,10 @@ class AppHandler(BaseHTTPRequestHandler):
                     raise OllamaChatCancelled("Participant cancelled the in-flight reply.")
                 try:
                     raw_line = resp.readline()
-                except socket.timeout:
-                    continue
+                except Exception as exc:
+                    if self._is_stream_poll_timeout(exc):
+                        continue
+                    raise
                 if not raw_line:
                     break
 

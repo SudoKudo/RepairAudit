@@ -3,10 +3,12 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import ssl
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.error import URLError
 
 
 MODULE_PATH = (
@@ -241,6 +243,86 @@ class ParticipantWebAppTemplateTests(unittest.TestCase):
                         {"model": "qwen3.6:27b", "messages": [], "stream": True},
                         request_id="req-2",
                     )
+
+    def test_stream_chat_tolerates_buffer_timeout_while_waiting_for_cancel(self) -> None:
+        class FakeSocket:
+            def settimeout(self, _value: float) -> None:
+                return None
+
+        class FakeRaw:
+            _sock = FakeSocket()
+
+        class FakeFP:
+            raw = FakeRaw()
+
+        class FakeResponse:
+            def __init__(self) -> None:
+                self.status = 200
+                self.fp = FakeFP()
+                self._steps: list[object] = [
+                    b'{"message":{"content":"Partial"},"done":false}\n',
+                    OSError("cannot read from timed out object"),
+                ]
+
+            def readline(self) -> bytes:
+                if not self._steps:
+                    return b""
+                step = self._steps.pop(0)
+                if isinstance(step, Exception):
+                    raise step
+                return step
+
+            def read(self) -> bytes:
+                return b""
+
+        handler = self._make_handler()
+        with patch.object(participant_web_app, "urlopen", return_value=FakeResponse()):
+            with patch.object(
+                participant_web_app.AppHandler,
+                "consume_chat_request_cancelled",
+                side_effect=[False, False, True],
+            ):
+                with self.assertRaises(participant_web_app.OllamaChatCancelled):
+                    handler._ollama_stream_chat(  # type: ignore[attr-defined]
+                        "/api/chat",
+                        {"model": "qwen3.6:27b", "messages": [], "stream": True},
+                        request_id="req-buffer-timeout",
+                    )
+
+    def test_ollama_request_retries_once_after_tls_record_layer_failure(self) -> None:
+        class FakeJsonResponse:
+            def __init__(self, body: str) -> None:
+                self._body = body
+
+            def __enter__(self) -> "FakeJsonResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+            def read(self) -> bytes:
+                return self._body.encode("utf-8")
+
+        handler = self._make_handler()
+        tls_error = URLError(ssl.SSLError("[SSL] record layer failure (_ssl.c:1000)"))
+        with patch.object(
+            participant_web_app,
+            "urlopen",
+            side_effect=[tls_error, FakeJsonResponse('{"models": []}')],
+        ) as mocked_urlopen:
+            result = handler._ollama_request("/api/tags", timeout=1.0)  # type: ignore[attr-defined]
+
+        self.assertEqual(result["models"], [])
+        self.assertEqual(mocked_urlopen.call_count, 2)
+
+    def test_ollama_request_reports_tls_record_layer_failure_cleanly(self) -> None:
+        handler = self._make_handler()
+        tls_error = URLError(ssl.SSLError("[SSL] record layer failure (_ssl.c:1000)"))
+        with patch.object(participant_web_app, "urlopen", side_effect=tls_error) as mocked_urlopen:
+            with self.assertRaisesRegex(RuntimeError, "secure connection to the configured LLM endpoint"):
+                handler._ollama_request("/api/tags", timeout=1.0)  # type: ignore[attr-defined]
+
+        self.assertEqual(mocked_urlopen.call_count, 2)
 
 
 if __name__ == "__main__":

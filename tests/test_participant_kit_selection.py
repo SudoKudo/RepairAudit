@@ -5,10 +5,12 @@ import csv
 import importlib.util
 import json
 import os
+import ssl
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.error import URLError
 from zipfile import ZipFile
 
 
@@ -403,6 +405,118 @@ class ParticipantKitSelectionTests(unittest.TestCase):
                 self.assertIn(f"P888/{participant_kit.PARTICIPANT_SUPPORT_DIR_NAME}/study_config.lock.json", names)
             finally:
                 researcher_map.unlink(missing_ok=True)
+
+    def test_unix_participant_kits_stamp_transport_retry_logic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            dataset_csv = tmp_path / "classified_dataset.csv"
+            out_root = tmp_path / "kits"
+
+            rows = []
+            for bucket in ("low", "medium", "high"):
+                for idx in range(1, 4):
+                    rows.append(
+                        {
+                            "sample_id": f"{bucket.upper()}{idx:03d}",
+                            "language": "Python",
+                            "hardness_strict": bucket,
+                            "code_sample": f"print('{bucket}-{idx}')",
+                            "is_vulnerable": "1",
+                            "cwe_primary": "CWE-89",
+                            "vulnerability_type": "Injection",
+                            "primary_expertise_area": "Backend / API Development",
+                            "secondary_expertise_areas": "[]",
+                            "file_path": f"src/{bucket}_{idx}.py",
+                        }
+                    )
+
+            with dataset_csv.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+                writer.writeheader()
+                for row in rows:
+                    writer.writerow(row)
+
+            researcher_maps: list[Path] = []
+            try:
+                for participant_id, participant_os in (("P889", "macos"), ("P890", "linux")):
+                    researcher_map = (
+                        Path(__file__).resolve().parents[1]
+                        / "participant_kits"
+                        / "_researcher_maps"
+                        / f"pilot__{participant_id}.json"
+                    )
+                    researcher_maps.append(researcher_map)
+                    args = argparse.Namespace(
+                        participant_id=participant_id,
+                        condition="security",
+                        phase="pilot",
+                        metadata_csv=str(dataset_csv),
+                        expertise_areas="Backend / API Development",
+                        samples_per_hardness=3,
+                        selection_seed=13,
+                        out_root=str(out_root),
+                        study_id="repairaudit-v1",
+                        participant_os=participant_os,
+                        llm_provider="ollama",
+                        llm_model="qwen3.6:27b",
+                        llm_base_url="https://example.test",
+                        temperature=0.2,
+                        top_p=0.9,
+                        top_k=40,
+                        num_predict=1536,
+                        seed=42,
+                        overwrite=False,
+                    )
+
+                    participant_kit.build_participant_kit(args)
+
+                    support_dir = out_root / participant_id / participant_kit.PARTICIPANT_SUPPORT_DIR_NAME
+                    launcher_path = out_root / participant_id / "Launch_Study_Web_App.sh"
+                    manifest = json.loads((support_dir / "kit_manifest.json").read_text(encoding="utf-8"))
+                    self.assertEqual(manifest["participant_os"], participant_os)
+                    self.assertTrue(launcher_path.exists())
+                    self.assertNotIn(b"\r\n", launcher_path.read_bytes())
+
+                    module_path = support_dir / "participant_web_app.py"
+                    spec = importlib.util.spec_from_file_location(f"kit_app_{participant_id}", module_path)
+                    if spec is None or spec.loader is None:
+                        self.fail(f"Could not load generated participant app from {module_path}")
+                    generated_app = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(generated_app)
+
+                    handler = object.__new__(generated_app.AppHandler)
+                    handler.store = type(
+                        "StoreStub",
+                        (),
+                        {"lock_data": {"llm": {"base_url": "https://example.test", "model": "qwen3.6:27b"}}},
+                    )()
+
+                    class FakeJsonResponse:
+                        def __init__(self, body: str) -> None:
+                            self._body = body
+
+                        def __enter__(self) -> "FakeJsonResponse":
+                            return self
+
+                        def __exit__(self, exc_type, exc, tb) -> bool:
+                            return False
+
+                        def read(self) -> bytes:
+                            return self._body.encode("utf-8")
+
+                    tls_error = URLError(ssl.SSLError("[SSL] record layer failure (_ssl.c:1000)"))
+                    with patch.object(
+                        generated_app,
+                        "urlopen",
+                        side_effect=[tls_error, FakeJsonResponse('{"models": []}')],
+                    ) as mocked_urlopen:
+                        response = handler._ollama_request("/api/tags", timeout=1.0)  # type: ignore[attr-defined]
+
+                    self.assertEqual(response["models"], [])
+                    self.assertEqual(mocked_urlopen.call_count, 2)
+            finally:
+                for path in researcher_maps:
+                    path.unlink(missing_ok=True)
 
     def test_clean_participant_kits_preserves_researcher_maps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

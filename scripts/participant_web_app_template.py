@@ -6,6 +6,7 @@ import csv
 import json
 import os
 import secrets
+import shutil
 import socket
 import ssl
 import subprocess
@@ -3145,27 +3146,43 @@ class AppHandler(BaseHTTPRequestHandler):
             method = "POST"
 
         req = Request(url=url, data=data, headers=headers, method=method)
-        try:
-            with self._open_llm_request(req, timeout=timeout) as resp:
-                raw = resp.read().decode("utf-8", errors="replace")
-        except HTTPError as exc:
-            raw = exc.read().decode("utf-8", errors="replace")
-            detail = raw.strip()
+        raw = ""
+        attempt_count = len(self._llm_retry_delays()) + 1
+        for attempt_index in range(attempt_count):
             try:
-                parsed = json.loads(raw)
-                if isinstance(parsed, dict):
-                    detail = str(parsed.get("error") or parsed.get("message") or detail).strip()
-            except Exception:
-                pass
-            if detail:
-                raise RuntimeError(f"LLM endpoint rejected the request ({exc.code}): {detail}") from exc
-            raise RuntimeError(f"LLM endpoint rejected the request ({exc.code}).") from exc
-        except URLError as exc:
-            raise self._llm_transport_error(exc) from exc
-        except ssl.SSLError as exc:
-            raise self._llm_transport_error(exc) from exc
-        except Exception as exc:
-            raise RuntimeError(f"LLM request failed: {exc}") from exc
+                with self._open_llm_request(req, timeout=timeout) as resp:
+                    raw = resp.read().decode("utf-8", errors="replace")
+                break
+            except HTTPError as exc:
+                raw = exc.read().decode("utf-8", errors="replace")
+                detail = raw.strip()
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        detail = str(parsed.get("error") or parsed.get("message") or detail).strip()
+                except Exception:
+                    pass
+                if detail:
+                    raise RuntimeError(f"LLM endpoint rejected the request ({exc.code}): {detail}") from exc
+                raise RuntimeError(f"LLM endpoint rejected the request ({exc.code}).") from exc
+            except URLError as exc:
+                if self._sleep_for_retryable_llm_transport(exc, attempt_index=attempt_index):
+                    continue
+                if self._can_use_curl_https_fallback() and self._is_tls_transport_issue(str(exc)):
+                    return self._curl_llm_request(path, payload, timeout=timeout)
+                raise self._llm_transport_error(exc) from exc
+            except ssl.SSLError as exc:
+                if self._sleep_for_retryable_llm_transport(exc, attempt_index=attempt_index):
+                    continue
+                if self._can_use_curl_https_fallback():
+                    return self._curl_llm_request(path, payload, timeout=timeout)
+                raise self._llm_transport_error(exc) from exc
+            except Exception as exc:
+                if self._sleep_for_retryable_llm_transport(exc, attempt_index=attempt_index):
+                    continue
+                if self._can_use_curl_https_fallback() and self._is_tls_transport_issue(str(exc)):
+                    return self._curl_llm_request(path, payload, timeout=timeout)
+                raise RuntimeError(f"LLM request failed: {exc}") from exc
 
         try:
             obj = json.loads(raw)
@@ -3184,6 +3201,9 @@ class AppHandler(BaseHTTPRequestHandler):
         if "ssl" in lower or "tls" in lower:
             return True
         tls_markers = [
+            "broken pipe",
+            "send failure",
+            "connection reset by peer",
             "record layer failure",
             "wrong version number",
             "unexpected eof while reading",
@@ -3191,18 +3211,156 @@ class AppHandler(BaseHTTPRequestHandler):
         ]
         return any(marker in lower for marker in tls_markers)
 
+    def _llm_retry_delays(self) -> tuple[float, ...]:
+        """Return the retry schedule used for short-lived HTTPS tunnel failures."""
+        return (0.5, 1.5)
+
+    def _sleep_for_retryable_llm_transport(
+        self,
+        exc: Exception,
+        *,
+        attempt_index: int,
+        received_bytes: bool = False,
+    ) -> bool:
+        """Sleep and signal a retry when the tunnel failed before any useful response arrived."""
+        if received_bytes:
+            return False
+        retry_delays = self._llm_retry_delays()
+        if attempt_index >= len(retry_delays):
+            return False
+        if not self._is_tls_transport_issue(str(exc)):
+            return False
+        time.sleep(retry_delays[attempt_index])
+        return True
+
     def _open_llm_request(self, req: Request, *, timeout: float):
-        """Open one LLM HTTP request, retrying once when the HTTPS tunnel fails during TLS setup."""
-        for attempt in range(2):
+        """Open one LLM HTTP request."""
+        return urlopen(req, timeout=timeout)
+
+    def _can_use_curl_https_fallback(self) -> bool:
+        """Return True when this runtime can retry an HTTPS tunnel call through curl."""
+        if os.name == "nt":
+            return False
+        parsed = urlparse(self._ollama_base_url())
+        if (parsed.scheme or "").lower() != "https":
+            return False
+        return bool(shutil.which("curl"))
+
+    def _curl_llm_request(
+        self,
+        path: str,
+        payload: dict[str, object] | None = None,
+        *,
+        timeout: float,
+    ) -> dict[str, object]:
+        """Retry one Ollama-compatible request through curl when Python TLS fails on Unix kits."""
+        url = self._ollama_url(path)
+        body = json.dumps(payload).encode("utf-8") if payload is not None else None
+        marker = b"__RA_STATUS__:"
+        attempt_count = len(self._llm_retry_delays()) + 1
+
+        for attempt_index in range(attempt_count):
+            command = [
+                "curl",
+                "--silent",
+                "--show-error",
+                "--location",
+                "--http1.1",
+                "--max-time",
+                str(max(timeout, 1.0)),
+                "--header",
+                "Connection: close",
+                "--header",
+                "ngrok-skip-browser-warning: true",
+                "--header",
+                "Accept: application/json",
+                "--request",
+                "POST" if payload is not None else "GET",
+            ]
+            if payload is not None:
+                command.extend(
+                    [
+                        "--header",
+                        "Content-Type: application/json",
+                        "--data-binary",
+                        "@-",
+                    ]
+                )
+            command.extend(
+                [
+                    "--write-out",
+                    f"\\n{marker.decode('ascii')}%{{http_code}}",
+                    url,
+                ]
+            )
+
             try:
-                return urlopen(req, timeout=timeout)
-            except HTTPError:
-                raise
-            except (URLError, ssl.SSLError) as exc:
-                if attempt == 0 and self._is_tls_transport_issue(str(exc)):
-                    time.sleep(0.5)
+                proc = subprocess.run(
+                    command,
+                    input=body,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    timeout=max(timeout + 5.0, 10.0),
+                )
+            except subprocess.TimeoutExpired as exc:
+                if attempt_index < len(self._llm_retry_delays()):
+                    time.sleep(self._llm_retry_delays()[attempt_index])
                     continue
-                raise
+                raise RuntimeError("LLM request timed out while retrying through curl.") from exc
+            except Exception as exc:
+                raise RuntimeError(f"LLM curl fallback failed to start: {exc}") from exc
+
+            stderr_text = proc.stderr.decode("utf-8", errors="replace").strip()
+            stdout = proc.stdout or b""
+            marker_index = stdout.rfind(marker)
+            if marker_index == -1:
+                detail = stderr_text or "curl fallback returned no HTTP status marker."
+                if self._is_tls_transport_issue(detail) and attempt_index < len(self._llm_retry_delays()):
+                    time.sleep(self._llm_retry_delays()[attempt_index])
+                    continue
+                if self._is_tls_transport_issue(detail):
+                    raise self._llm_transport_error(RuntimeError(detail))
+                raise RuntimeError(f"LLM curl fallback failed: {detail}")
+
+            raw_body = stdout[:marker_index].rstrip(b"\r\n")
+            status_text = stdout[marker_index + len(marker) :].decode("utf-8", errors="replace").strip()
+            try:
+                status = int(status_text or "0")
+            except Exception:
+                status = 0
+
+            if proc.returncode != 0:
+                detail = stderr_text or f"curl exited with status {proc.returncode}."
+                if self._is_tls_transport_issue(detail) and attempt_index < len(self._llm_retry_delays()):
+                    time.sleep(self._llm_retry_delays()[attempt_index])
+                    continue
+                if self._is_tls_transport_issue(detail):
+                    raise self._llm_transport_error(RuntimeError(detail))
+                raise RuntimeError(f"Could not reach the configured LLM endpoint at {self._ollama_base_url()} ({detail})")
+
+            raw_text = raw_body.decode("utf-8", errors="replace").strip()
+            if status < 200 or status >= 300:
+                detail = raw_text
+                try:
+                    parsed_error = json.loads(raw_text)
+                    if isinstance(parsed_error, dict):
+                        detail = str(parsed_error.get("error") or parsed_error.get("message") or detail).strip()
+                except Exception:
+                    pass
+                if detail:
+                    raise RuntimeError(f"LLM endpoint rejected the request ({status}): {detail}")
+                raise RuntimeError(f"LLM endpoint rejected the request ({status}).")
+
+            try:
+                obj = json.loads(raw_text or "{}")
+            except Exception as exc:
+                raise RuntimeError("LLM endpoint returned non-JSON response.") from exc
+            if not isinstance(obj, dict):
+                raise RuntimeError("LLM endpoint returned unexpected response format.")
+            return obj
+
+        raise RuntimeError("LLM curl fallback exhausted its retry budget.")
 
     def _llm_transport_error(self, exc: Exception) -> RuntimeError:
         """Normalize lower-level endpoint transport failures to one participant-facing message."""
@@ -3272,6 +3430,18 @@ class AppHandler(BaseHTTPRequestHandler):
                 opts[key] = llm.get(key)
         return opts
 
+    def _ollama_non_stream_chat(
+        self,
+        path: str,
+        payload: dict[str, object],
+        *,
+        timeout: float,
+    ) -> dict[str, object]:
+        """Retry one chat request without streaming when the streamed tunnel path keeps failing."""
+        fallback_payload = dict(payload)
+        fallback_payload["stream"] = False
+        return self._ollama_request(path, fallback_payload, timeout=timeout)
+
     def _participant_chat_system_prompt(self) -> str:
         """Return the participant-side system prompt used for chat requests."""
         return participant_chat_system_prompt()
@@ -3293,33 +3463,86 @@ class AppHandler(BaseHTTPRequestHandler):
         }
         body = json.dumps(payload).encode("utf-8")
         req = Request(url=url, data=body, headers=headers, method="POST")
-        resp = None
+        attempt_count = len(self._llm_retry_delays()) + 1
 
-        try:
-            resp = self._open_llm_request(req, timeout=timeout)
-        except HTTPError as exc:
-            raw = exc.read().decode("utf-8", errors="replace")
-            detail = raw.strip()
+        for attempt_index in range(attempt_count):
+            resp = None
+            assistant_parts: list[str] = []
+            final_obj: dict[str, object] = {}
             try:
-                parsed_error = json.loads(raw)
-                if isinstance(parsed_error, dict):
-                    detail = str(parsed_error.get("error") or parsed_error.get("message") or detail).strip()
-            except Exception:
-                pass
-            if detail:
-                raise RuntimeError(f"LLM endpoint rejected the request ({exc.code}): {detail}") from exc
-            raise RuntimeError(f"LLM endpoint rejected the request ({exc.code}).") from exc
-        except URLError as exc:
-            raise self._llm_transport_error(exc) from exc
-        except ssl.SSLError as exc:
-            raise self._llm_transport_error(exc) from exc
-        except Exception as exc:
-            raise RuntimeError(f"LLM request failed: {exc}") from exc
+                resp = self._open_llm_request(req, timeout=timeout)
+                status = int(getattr(resp, "status", 200) or 200)
+                if status < 200 or status >= 300:
+                    raw = resp.read().decode("utf-8", errors="replace")
+                    detail = raw.strip()
+                    try:
+                        parsed_error = json.loads(raw)
+                        if isinstance(parsed_error, dict):
+                            detail = str(parsed_error.get("error") or parsed_error.get("message") or detail).strip()
+                    except Exception:
+                        pass
+                    if detail:
+                        raise RuntimeError(f"LLM endpoint rejected the request ({status}): {detail}")
+                    raise RuntimeError(f"LLM endpoint rejected the request ({status}).")
 
-        try:
-            status = int(getattr(resp, "status", 200) or 200)
-            if status < 200 or status >= 300:
-                raw = resp.read().decode("utf-8", errors="replace")
+                try:
+                    raw_socket = getattr(getattr(resp, "fp", None), "raw", None)
+                    sock = getattr(raw_socket, "_sock", None)
+                    if sock is not None:
+                        sock.settimeout(0.5)
+                except Exception:
+                    pass
+
+                while True:
+                    if request_id and AppHandler.consume_chat_request_cancelled(request_id):
+                        raise OllamaChatCancelled("Participant cancelled the in-flight reply.")
+                    try:
+                        raw_line = resp.readline()
+                    except Exception as exc:
+                        if self._is_stream_poll_timeout(exc):
+                            continue
+                        raise
+                    if not raw_line:
+                        break
+
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+
+                    try:
+                        obj = json.loads(line)
+                    except Exception as exc:
+                        raise RuntimeError("LLM endpoint returned invalid streamed JSON.") from exc
+                    if not isinstance(obj, dict):
+                        raise RuntimeError("LLM endpoint returned unexpected streamed response format.")
+
+                    final_obj = obj
+                    chunk = self._ollama_message_text(obj)
+                    if chunk:
+                        assistant_parts.append(chunk)
+                    if bool(obj.get("done", False)):
+                        break
+
+                assistant_text = "".join(assistant_parts)
+                if not final_obj:
+                    raise RuntimeError("LLM endpoint returned an empty streamed response.")
+
+                merged = dict(final_obj)
+                message_obj = merged.get("message", {})
+                if isinstance(message_obj, dict):
+                    merged["message"] = {
+                        **message_obj,
+                        "content": assistant_text,
+                    }
+                else:
+                    merged["message"] = {"role": "assistant", "content": assistant_text}
+                if "response" in merged:
+                    merged["response"] = assistant_text
+                return merged
+            except OllamaChatCancelled:
+                raise
+            except HTTPError as exc:
+                raw = exc.read().decode("utf-8", errors="replace")
                 detail = raw.strip()
                 try:
                     parsed_error = json.loads(raw)
@@ -3328,84 +3551,51 @@ class AppHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
                 if detail:
-                    raise RuntimeError(f"LLM endpoint rejected the request ({status}): {detail}")
-                raise RuntimeError(f"LLM endpoint rejected the request ({status}).")
-
-            try:
-                raw_socket = getattr(getattr(resp, "fp", None), "raw", None)
-                sock = getattr(raw_socket, "_sock", None)
-                if sock is not None:
-                    sock.settimeout(0.5)
-            except Exception:
-                pass
-
-            assistant_parts: list[str] = []
-            final_obj: dict[str, object] = {}
-
-            while True:
-                if request_id and AppHandler.consume_chat_request_cancelled(request_id):
-                    raise OllamaChatCancelled("Participant cancelled the in-flight reply.")
-                try:
-                    raw_line = resp.readline()
-                except Exception as exc:
-                    if self._is_stream_poll_timeout(exc):
-                        continue
-                    raise
-                if not raw_line:
-                    break
-
-                line = raw_line.decode("utf-8", errors="replace").strip()
-                if not line:
+                    raise RuntimeError(f"LLM endpoint rejected the request ({exc.code}): {detail}") from exc
+                raise RuntimeError(f"LLM endpoint rejected the request ({exc.code}).") from exc
+            except URLError as exc:
+                received_bytes = bool(assistant_parts or final_obj)
+                if self._sleep_for_retryable_llm_transport(
+                    exc,
+                    attempt_index=attempt_index,
+                    received_bytes=received_bytes,
+                ):
                     continue
-
+                if not received_bytes:
+                    return self._ollama_non_stream_chat(path, payload, timeout=timeout)
+                raise self._llm_transport_error(exc) from exc
+            except ssl.SSLError as exc:
+                received_bytes = bool(assistant_parts or final_obj)
+                if self._sleep_for_retryable_llm_transport(
+                    exc,
+                    attempt_index=attempt_index,
+                    received_bytes=received_bytes,
+                ):
+                    continue
+                if not received_bytes:
+                    return self._ollama_non_stream_chat(path, payload, timeout=timeout)
+                raise self._llm_transport_error(exc) from exc
+            except socket.timeout as exc:
+                raise RuntimeError("LLM streaming request timed out.") from exc
+            except Exception as exc:
+                received_bytes = bool(assistant_parts or final_obj)
+                if self._sleep_for_retryable_llm_transport(
+                    exc,
+                    attempt_index=attempt_index,
+                    received_bytes=received_bytes,
+                ):
+                    continue
+                if not received_bytes and self._is_tls_transport_issue(str(exc)):
+                    return self._ollama_non_stream_chat(path, payload, timeout=timeout)
+                if isinstance(exc, RuntimeError):
+                    raise
+                raise RuntimeError(f"LLM request failed: {exc}") from exc
+            finally:
                 try:
-                    obj = json.loads(line)
-                except Exception as exc:
-                    raise RuntimeError("LLM endpoint returned invalid streamed JSON.") from exc
-                if not isinstance(obj, dict):
-                    raise RuntimeError("LLM endpoint returned unexpected streamed response format.")
-
-                final_obj = obj
-                chunk = self._ollama_message_text(obj)
-                if chunk:
-                    assistant_parts.append(chunk)
-                if bool(obj.get("done", False)):
-                    break
-
-            assistant_text = "".join(assistant_parts)
-            if not final_obj:
-                raise RuntimeError("LLM endpoint returned an empty streamed response.")
-
-            merged = dict(final_obj)
-            message_obj = merged.get("message", {})
-            if isinstance(message_obj, dict):
-                merged["message"] = {
-                    **message_obj,
-                    "content": assistant_text,
-                }
-            else:
-                merged["message"] = {"role": "assistant", "content": assistant_text}
-            if "response" in merged:
-                merged["response"] = assistant_text
-            return merged
-        except OllamaChatCancelled:
-            raise
-        except URLError as exc:
-            raise self._llm_transport_error(exc) from exc
-        except ssl.SSLError as exc:
-            raise self._llm_transport_error(exc) from exc
-        except socket.timeout as exc:
-            raise RuntimeError("LLM streaming request timed out.") from exc
-        except Exception as exc:
-            if isinstance(exc, RuntimeError):
-                raise
-            raise RuntimeError(f"LLM request failed: {exc}") from exc
-        finally:
-            try:
-                if resp is not None:
-                    resp.close()
-            except Exception:
-                pass
+                    if resp is not None:
+                        resp.close()
+                except Exception:
+                    pass
 
     def _ollama_message_text(self, resp: dict[str, object]) -> str:
         """Extract assistant text from either Ollama chat or generate style responses."""

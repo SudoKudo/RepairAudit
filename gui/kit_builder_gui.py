@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 import threading
@@ -144,7 +145,6 @@ class KitBuilderGUI(tk.Tk):
         self.start_index_var = tk.IntVar(value=1)
         self.pad_width_var = tk.IntVar(value=3)
         self.overwrite_var = tk.BooleanVar(value=False)
-        self.dropbox_publish_var = tk.BooleanVar(value=False)
         self._dropbox_task_thread: threading.Thread | None = None
         self._saved_map_items_by_iid: dict[str, dict[str, Any]] = {}
 
@@ -222,7 +222,6 @@ class KitBuilderGUI(tk.Tk):
             "start_index": int(self.start_index_var.get()),
             "pad_width": int(self.pad_width_var.get()),
             "overwrite": bool(self.overwrite_var.get()),
-            "dropbox_publish": bool(self.dropbox_publish_var.get()),
             "expertise_areas": self._selected_expertise_areas(),
         }
 
@@ -283,7 +282,6 @@ class KitBuilderGUI(tk.Tk):
             self.start_index_var.set(int(form.get("start_index", self.start_index_var.get())))
             self.pad_width_var.set(int(form.get("pad_width", self.pad_width_var.get())))
             self.overwrite_var.set(bool(form.get("overwrite", self.overwrite_var.get())))
-            self.dropbox_publish_var.set(bool(form.get("dropbox_publish", self.dropbox_publish_var.get())))
 
             selected_obj = form.get("expertise_areas")
             selected = {str(label) for label in selected_obj} if isinstance(selected_obj, list) else set()
@@ -313,7 +311,6 @@ class KitBuilderGUI(tk.Tk):
             self.start_index_var,
             self.pad_width_var,
             self.overwrite_var,
-            self.dropbox_publish_var,
             *self.expertise_vars.values(),
         ]
         for var in tracked_vars:
@@ -464,8 +461,7 @@ class KitBuilderGUI(tk.Tk):
         self._row_spin(naming, 3, "Start Number", self.start_index_var, 0, 99999, self._refresh_preview)
         self._row_spin(naming, 4, "Zero-Pad Width", self.pad_width_var, 0, 8, self._refresh_preview)
         ttk.Checkbutton(naming, text="Allow overwrite of existing kit folders", variable=self.overwrite_var).grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 8))
-        ttk.Checkbutton(naming, text="Publish share ZIP and submission link through Dropbox", variable=self.dropbox_publish_var).grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 8))
-        ttk.Label(naming, text="Preview of participant IDs to create", style="Field.TLabel").grid(row=7, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        ttk.Label(naming, text="Preview of participant IDs to create", style="Field.TLabel").grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 6))
 
         preview_shell = tk.Frame(naming, bg=self._log_bg, highlightbackground=self._border_strong, highlightthickness=1, bd=0)
         preview_shell.grid(row=8, column=0, columnspan=2, sticky="nsew")
@@ -757,6 +753,86 @@ class KitBuilderGUI(tk.Tk):
             f"Connected as:\n{result.get('display_name', '')}\n{result.get('email', '')}",
         )
 
+    def _open_local_path(self, path_text: str) -> None:
+        """Open one local file with the platform-default application."""
+        path = Path(path_text)
+        if not path.exists():
+            messagebox.showerror("Open Failed", f"File not found:\n{path}")
+            return
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(path)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+        except Exception as exc:
+            messagebox.showerror("Open Failed", f"Could not open:\n{path}\n\n{exc}")
+
+    def _show_dropbox_publish_dialog(
+        self,
+        *,
+        message: str,
+        report_text_path: str,
+        report_csv_path: str,
+    ) -> None:
+        """Show the Dropbox publish result with direct actions for the local summary files."""
+        dialog = tk.Toplevel(self)
+        dialog.title("Dropbox Publish Complete")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        dialog.configure(bg=self._panel)
+
+        body = ttk.Frame(dialog, style="Panel.TFrame", padding=14)
+        body.grid(row=0, column=0, sticky="nsew")
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(0, weight=1)
+
+        ttk.Label(
+            body,
+            text=message,
+            style="Hint.TLabel",
+            justify="left",
+            wraplength=700,
+        ).grid(row=0, column=0, columnspan=4, sticky="w")
+
+        button_row = ttk.Frame(body, style="Panel.TFrame")
+        button_row.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(12, 0))
+        button_row.columnconfigure(0, weight=1)
+
+        next_column = 0
+        if report_text_path:
+            ttk.Button(
+                button_row,
+                text="Open Summary Text",
+                command=lambda: self._open_local_path(report_text_path),
+                style="Primary.TButton",
+            ).grid(row=0, column=next_column, padx=(0, 8), sticky="w")
+            next_column += 1
+        if report_csv_path:
+            ttk.Button(
+                button_row,
+                text="Open CSV Log",
+                command=lambda: self._open_local_path(report_csv_path),
+                style="Secondary.TButton",
+            ).grid(row=0, column=next_column, padx=(0, 8), sticky="w")
+            next_column += 1
+        ttk.Button(
+            button_row,
+            text="Close",
+            command=dialog.destroy,
+            style="Secondary.TButton",
+        ).grid(row=0, column=next_column, sticky="e")
+
+        dialog.update_idletasks()
+        width = max(560, dialog.winfo_reqwidth())
+        height = dialog.winfo_reqheight()
+        x = self.winfo_rootx() + max(20, (self.winfo_width() - width) // 2)
+        y = self.winfo_rooty() + max(20, (self.winfo_height() - height) // 3)
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+        dialog.focus_set()
+
     def _publish_selected_saved_kits(self, *, confirm: bool = True) -> None:
         """Publish the selected saved kits to Dropbox."""
         selected_items = self._selected_saved_kit_items()
@@ -821,7 +897,11 @@ class KitBuilderGUI(tk.Tk):
             for row in failures:
                 lines.append(f"{row.get('phase', '')}/{row.get('participant_id', '')}: {row.get('error', '')}")
 
-        messagebox.showinfo("Dropbox Publish Complete", "\n".join(lines).strip())
+        self._show_dropbox_publish_dialog(
+            message="\n".join(lines).strip(),
+            report_text_path=report_text_path,
+            report_csv_path=report_csv_path,
+        )
 
     def _create_kits(self) -> None:
         """Create kits for all previewed IDs after strict preflight checks."""
@@ -837,16 +917,16 @@ class KitBuilderGUI(tk.Tk):
                 raise FileExistsError("The following participant kit IDs already exist.\n\n" f"{listed}\n\n" "Change naming settings or enable overwrite.")
             created: list[str] = []
             for pid in participant_ids:
-                args = argparse.Namespace(participant_id=pid, condition=self.condition_var.get().strip(), phase=self.phase_var.get().strip(), metadata_csv=str(metadata_csv), expertise_areas=", ".join(self._selected_expertise_areas()), samples_per_hardness=int(self.samples_per_hardness_var.get()), selection_seed=int(self.selection_seed_var.get()), out_root=str(out_root), study_id=self.study_id_var.get().strip(), participant_os=PARTICIPANT_OS_LABEL_TO_VALUE.get(self.participant_os_var.get().strip(), self.participant_os_var.get().strip()), llm_provider=_normalize_provider(self.provider_var.get()), llm_model=self.model_var.get().strip(), llm_base_url=self.base_url_var.get().strip(), temperature=0.2, top_p=0.9, top_k=40, num_predict=1536, seed=42, dropbox_publish=bool(self.dropbox_publish_var.get()), overwrite=bool(self.overwrite_var.get()))
+                args = argparse.Namespace(participant_id=pid, condition=self.condition_var.get().strip(), phase=self.phase_var.get().strip(), metadata_csv=str(metadata_csv), expertise_areas=", ".join(self._selected_expertise_areas()), samples_per_hardness=int(self.samples_per_hardness_var.get()), selection_seed=int(self.selection_seed_var.get()), out_root=str(out_root), study_id=self.study_id_var.get().strip(), participant_os=PARTICIPANT_OS_LABEL_TO_VALUE.get(self.participant_os_var.get().strip(), self.participant_os_var.get().strip()), llm_provider=_normalize_provider(self.provider_var.get()), llm_model=self.model_var.get().strip(), llm_base_url=self.base_url_var.get().strip(), temperature=0.2, top_p=0.9, top_k=40, num_predict=1536, seed=42, dropbox_publish=False, overwrite=bool(self.overwrite_var.get()))
                 build_participant_kit(args)
                 created.append(pid)
             self._write_session_state()
             self._refresh_saved_kits_table(select_participant_ids=created)
             prompt = "Created participant kits:\n\n" + "\n".join(created)
-            if self.dropbox_publish_var.get():
-                messagebox.showinfo("Kits Created", prompt + "\n\nDropbox publish was enabled during kit creation.")
-            elif messagebox.askyesno("Kits Created", prompt + "\n\nPublish these kits to Dropbox now?"):
-                self._publish_selected_saved_kits(confirm=False)
+            messagebox.showinfo(
+                "Kits Created",
+                prompt + "\n\nUse the saved kits table and the Publish Selected Kits button when you are ready to send them to Dropbox.",
+            )
         except Exception as exc:
             messagebox.showerror("Creation Failed", str(exc))
 

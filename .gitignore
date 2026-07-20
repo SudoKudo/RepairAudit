@@ -53,6 +53,11 @@ data/aggregated/**
 *.log
 
 # =========================
+# Local-only tests
+# =========================
+tests/
+
+# =========================
 # Local scratch / helper files
 # =========================
 tmp_*/

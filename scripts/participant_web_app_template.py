@@ -92,6 +92,11 @@ def _to_int(value: object, default: int = 0) -> int:
         return default
 
 
+def _text_value(value: object) -> str:
+    """Normalize dynamic form values to stripped text before saving or validating them."""
+    return str(value or "").strip()
+
+
 PROMPT_STRATEGY_OPTIONS = [
     ("zero_shot", "Zero-Shot"),
     ("few_shot", "Few-Shot"),
@@ -444,7 +449,7 @@ class StudyStore:
                 if key == "snippet_id":
                     continue
                 if key in summary:
-                    row[key] = (summary.get(key) or "").strip()
+                    row[key] = _text_value(summary.get(key))
 
             # Auto-fill from chat and write back into the CSV row object.
             normalized = self._auto_fill_row_from_chat(snippet_id, dict(row))
@@ -470,9 +475,9 @@ class StudyStore:
     def _validate_summary(self, summary: dict[str, str]) -> None:
         """Validate one normalized snippet-summary row before strict save or export."""
         try:
-            turns = int((summary.get("turns") or "0").strip() or "0")
-            applied = int((summary.get("applied_turns") or "").strip())
-            confidence = int((summary.get("confidence_1to5") or "").strip())
+            turns = int(_text_value(summary.get("turns")) or "0")
+            applied = int(_text_value(summary.get("applied_turns")))
+            confidence = int(_text_value(summary.get("confidence_1to5")))
         except Exception as exc:
             raise ValueError("Turns, Applied Turns, and Confidence must be integers.") from exc
 
@@ -489,7 +494,7 @@ class StudyStore:
         strategy_primary = (summary.get("strategy_primary") or "").strip()
         if strategy_primary not in PROMPT_STRATEGY_VALUES:
             raise ValueError("strategy_primary must be a valid prompt strategy.")
-        if strategy_primary == "other" and not (summary.get("strategy_other_text") or "").strip():
+        if strategy_primary == "other" and not _text_value(summary.get("strategy_other_text")):
             raise ValueError("Describe the primary strategy when Other is selected.")
 
 
@@ -510,8 +515,8 @@ class StudyStore:
 
 
         try:
-            turns = int((row.get("turns") or "").strip())
-            applied = int((row.get("applied_turns") or "").strip())
+            turns = int(_text_value(row.get("turns")))
+            applied = int(_text_value(row.get("applied_turns")))
             if turns < 1:
                 issues.append("at least one in-app LLM turn is required")
             if applied < 0:
@@ -522,7 +527,7 @@ class StudyStore:
             issues.append("turn fields must be integers")
 
         try:
-            conf = int((row.get("confidence_1to5") or "").strip())
+            conf = int(_text_value(row.get("confidence_1to5")))
             if conf < 1 or conf > 5:
                 issues.append("confidence must be 1-5")
         except Exception:
@@ -863,7 +868,7 @@ class StudyStore:
         if not entries:
             # Keep turns explicit and valid even when participant used no LLM
             # turns for this snippet.
-            out["turns"] = str(int((out.get("turns") or "0").strip() or "0"))
+            out["turns"] = str(int(_text_value(out.get("turns")) or "0"))
             out["first_prompt"] = str(out.get("first_prompt") or "")
             out["final_prompt"] = str(out.get("final_prompt") or "")
             return out
@@ -888,7 +893,7 @@ class StudyStore:
             out["tool"] = latest_provider.capitalize()
 
         try:
-            applied = int((out.get("applied_turns") or "").strip())
+            applied = int(_text_value(out.get("applied_turns")))
             total_turns = int(out["turns"])
             if applied > total_turns:
                 out["applied_turns"] = str(total_turns)
@@ -911,7 +916,9 @@ class StudyStore:
 
 def html_page(csrf_token: str) -> str:
     """Return participant UI HTML for the in-kit web app."""
-    return r"""<!doctype html>
+    # Keep this as a normal triple-quoted string so the embedded JavaScript
+    # regex and newline escapes render correctly in the browser.
+    return """<!doctype html>
 <html>
 <head>
 <meta charset="utf-8" />
@@ -1782,7 +1789,7 @@ function fillSummary(row){
     var key = fields[i];
     var el = byId(key);
     if(!el){ continue; }
-    el.value = row[key] || "";
+    el.value = row[key] == null ? "" : String(row[key]);
   }
   updateStrategyOtherField();
 }
@@ -1891,6 +1898,34 @@ function updateBaselineSelectionNote(){
     return;
   }
   note.textContent = "Click one line, then another line, to mark a range. Use Copy Marked Lines when you only need part of the file.";
+}
+
+function markedBaselineSelectionForCurrent(){
+  if(!currentSid){
+    return null;
+  }
+  var lines = baselineLinesForText(baselineTextBySnippet[currentSid] || "");
+  if(!lines.length){
+    return null;
+  }
+  var selection = baselineSelectionBySnippet[currentSid];
+  var anchor = baselineAnchorLineBySnippet[currentSid];
+  var start = 0;
+  var end = 0;
+  if(selection && Number.isFinite(selection.start) && Number.isFinite(selection.end)){
+    start = Math.max(1, selection.start);
+    end = Math.min(lines.length, selection.end);
+  } else if(Number.isFinite(anchor) && anchor > 0){
+    start = anchor;
+    end = anchor;
+  } else {
+    return null;
+  }
+  return {
+    start: start,
+    end: end,
+    text: lines.slice(start - 1, end).join("\\n")
+  };
 }
 
 function renderBaselineViewer(text, sid){
@@ -2056,31 +2091,12 @@ function copyBaseline(){
 }
 
 function copyMarkedBaseline(){
-  if(!currentSid){
-    setMsg("No snippet selected.", false);
-    return;
-  }
-  var lines = baselineLinesForText(baselineTextBySnippet[currentSid] || "");
-  if(!lines.length){
-    setMsg("No baseline code available to copy.", false);
-    return;
-  }
-  var selection = baselineSelectionBySnippet[currentSid];
-  var anchor = baselineAnchorLineBySnippet[currentSid];
-  var start = 0;
-  var end = 0;
-  if(selection && Number.isFinite(selection.start) && Number.isFinite(selection.end)){
-    start = Math.max(1, selection.start);
-    end = Math.min(lines.length, selection.end);
-  } else if(Number.isFinite(anchor) && anchor > 0){
-    start = anchor;
-    end = anchor;
-  } else {
+  var marked = markedBaselineSelectionForCurrent();
+  if(!marked){
     setMsg("Mark a baseline line or line range first.", false);
     return;
   }
-  var snippet = lines.slice(start - 1, end).join("\\n");
-  copyTextToClipboard(snippet, "Marked baseline lines copied to clipboard.", "Could not copy marked baseline lines.");
+  copyTextToClipboard(marked.text, "Marked baseline lines copied to clipboard.", "Could not copy marked baseline lines.");
 }
 
 function toggleReadme(){
@@ -2121,7 +2137,7 @@ function buildOnboardingHtml(data){
     "<ul>",
     "<li>Select a snippet from the left list.</li>",
     "<li>Review the baseline code and decide whether you want to inspect it, ask questions, or change it.</li>",
-    "<li>Click one baseline line, then another, if you want to mark and copy only part of the baseline into the chat.</li>",
+    "<li>Click one baseline line, then another, if you want to mark part of the baseline. You can copy that range manually into the chat.</li>",
     "<li>Use the in-app chat however you normally would. If you decide a change is needed, place your final answer in <strong>Final Submitted Code</strong>.</li>",
     "<li>The baseline pane is reference-only. Only <strong>Final Submitted Code</strong> is exported for analysis.</li>",
     started

@@ -4048,8 +4048,6 @@ class AppHandler(BaseHTTPRequestHandler):
                 code, output = self.store.build_submission_zip()
                 if code == 0:
                     self._json({"ok": True, "message": "Submission ZIP created successfully in exports/."})
-                    self.close_connection = True
-                    self._shutdown_server_soon()
                 else:
                     self._json(
                         {

@@ -970,8 +970,8 @@ textarea{font-family:Consolas,monospace;font-size:13px;min-height:220px;line-hei
 .baselineLine{display:grid;grid-template-columns:56px minmax(0,1fr);align-items:stretch;border-bottom:1px solid #edf3ff;cursor:pointer}
 .baselineLine:last-child{border-bottom:none}
 .baselineLine:hover{background:#eef5ff}
-.baselineLine.anchor{background:#edf4ff}
-.baselineLine.marked{background:#dfeeff}
+.baselineLine.anchor{background:#fff3c4;box-shadow:inset 4px 0 0 #b97800}
+.baselineLine.marked{background:#d7e8ff;box-shadow:inset 4px 0 0 #1769d1}
 .baselineNum{padding:0 10px;color:#6a7f9e;text-align:right;border-right:1px solid #e1ebff;user-select:none}
 .baselineText{padding:0 12px;white-space:pre;overflow-x:auto}
 #chat_prompt{min-height:105px}
@@ -1056,11 +1056,7 @@ select:focus{
       </div>
       <div class="lbl" id="baselineMeta" style="margin:0 0 4px 0" title="Language and file name for this baseline snippet."></div>
       <div id="baseline_code" title="Baseline snippet is read-only. Click one line, then another line, to mark a range."></div>
-      <div class="lbl" id="baselineSelectionNote" style="margin:6px 0 0 0">Click one line, then another line, to mark a range. Use Copy Marked Lines when you only need part of the file.</div>
-      <div class="lbl" style="margin:10px 0 4px 0" title="Paste and refine the final code you want to submit for this snippet.">Final Submitted Code</div>
-      <textarea id="edited_code" wrap="off" spellcheck="false" title="Paste the final code here, then edit it until it matches what you want to submit."></textarea>
-
-      <hr style="border:none;border-top:1px solid #e5edff;margin:12px 0" />
+      <div class="lbl" id="baselineSelectionNote" style="margin:6px 0 0 0">Selection: none. Click a start line, then an end line to mark a range.</div>
       <div class="sp">
         <strong title="Use this panel to chat with the LLM assigned to this kit. Prompts and replies are auto-logged to this snippet.">In-App LLM Chat</strong>
         <div class="row">
@@ -1083,6 +1079,10 @@ select:focus{
         <button class="btn alt tiny" id="discardChatBtn" type="button" style="display:none" title="Stop waiting for the current reply and discard it.">Stop / Discard Reply</button>
       </div>
       <div class="lbl" style="margin-top:6px">Prompts and replies here are auto-logged for this snippet.</div>
+
+      <hr style="border:none;border-top:1px solid #e5edff;margin:12px 0" />
+      <div class="lbl" style="margin:10px 0 4px 0" title="Paste and refine the final code you want to submit for this snippet.">Final Submitted Code</div>
+      <textarea id="edited_code" wrap="off" spellcheck="false" title="Paste the final code here, then edit it until it matches what you want to submit."></textarea>
     </section>
 
     <section class="card">
@@ -1732,7 +1732,7 @@ function renderSidebar(){
     badge.textContent = complete ? "Complete" : "In Progress";
     row.appendChild(left);
     row.appendChild(badge);
-    row.onclick = (function(j){ return function(){ idx = j; loadSnippet(); }; })(i);
+    row.onclick = (function(j){ return function(){ selectSnippet(j); }; })(i);
     list.appendChild(row);
   }
 }
@@ -1887,17 +1887,17 @@ function updateBaselineSelectionNote(){
   var anchor = baselineAnchorLineBySnippet[currentSid];
   if(selection && Number.isFinite(selection.start) && Number.isFinite(selection.end)){
     if(selection.start === selection.end){
-      note.textContent = "Marked line " + selection.start + ". Use Copy Marked Lines or click another line to start over.";
+      note.textContent = "Selection: line " + selection.start + " is marked. Use Copy Marked Lines, or click another line to start a new selection.";
     } else {
-      note.textContent = "Marked lines " + selection.start + "-" + selection.end + ". Use Copy Marked Lines when you only need that range.";
+      note.textContent = "Selection: lines " + selection.start + "-" + selection.end + " are marked. Use Copy Marked Lines when you only need that range.";
     }
     return;
   }
   if(Number.isFinite(anchor) && anchor > 0){
-    note.textContent = "Start line set to " + anchor + ". Click another line to finish the range.";
+    note.textContent = "Selection start: line " + anchor + ". Click an end line to finish the range.";
     return;
   }
-  note.textContent = "Click one line, then another line, to mark a range. Use Copy Marked Lines when you only need part of the file.";
+  note.textContent = "Selection: none. Click a start line, then an end line to mark a range.";
 }
 
 function markedBaselineSelectionForCurrent(){
@@ -2521,6 +2521,19 @@ function saveCurrent(nextFn){
   }, function(msg){
     setConn(false);
     setMsg(msg, false);
+  });
+}
+
+function selectSnippet(targetIndex){
+  if(!state || !state.snippet_ids || targetIndex < 0 || targetIndex >= state.snippet_ids.length || targetIndex === idx){
+    return;
+  }
+  saveDraftCurrent(function(){
+    idx = targetIndex;
+    loadSnippet();
+  }, function(msg){
+    setConn(false);
+    setMsg("Could not save this snippet before switching: " + msg, false);
   });
 }
 

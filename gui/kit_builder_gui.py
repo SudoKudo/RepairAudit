@@ -657,7 +657,7 @@ class KitBuilderGUI(tk.Tk):
 
     def _validate_before_create(self, participant_ids: list[str]) -> list[str]:
         """Return a list of conflicting IDs that already exist on disk."""
-        out_root = Path(self.out_root_var.get().strip())
+        out_root = _repo_path(self.out_root_var.get().strip())
         conflicts: list[str] = []
         for pid in participant_ids:
             if (out_root / pid).exists():
@@ -950,7 +950,7 @@ class KitBuilderGUI(tk.Tk):
         """Create kits for all previewed IDs after strict preflight checks."""
         try:
             participant_ids = self._build_participant_ids()
-            out_root = Path(self.out_root_var.get().strip())
+            out_root = _repo_path(self.out_root_var.get().strip())
             metadata_csv = _repo_path(self.metadata_var.get().strip())
             if not metadata_csv.exists():
                 restored = _restore_bundled_classified_dataset(metadata_csv)
@@ -973,8 +973,12 @@ class KitBuilderGUI(tk.Tk):
             prompt = "Created participant kits:\n\n" + "\n".join(created)
             messagebox.showinfo(
                 "Kits Created",
-                prompt + "\n\nUse the saved kits table and the Publish Selected Kits button when you are ready to send them to Dropbox.",
+                prompt
+                + f"\n\nSaved in:\n{out_root}\n\n"
+                + "Use the saved kits table and the Publish Selected Kits button when you are ready to send them to Dropbox.",
             )
+            if messagebox.askyesno("Open Kit Folder", "Open the folder containing the new kit(s)?"):
+                self._open_local_path(str(out_root))
         except Exception as exc:
             messagebox.showerror("Creation Failed", str(exc))
 

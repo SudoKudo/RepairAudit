@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -13,12 +14,14 @@ from typing import Any, Callable
 import tkinter as tk
 from tkinter import messagebox, ttk
 from urllib.parse import urlparse
+import zipfile
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPERTISE_AREAS_PATH = REPO_ROOT / "tools" / "domain_classification" / "expertise_areas.jsonl"
 DEFAULT_CLASSIFIED_SOURCE_PATH = "data/datasets/classified/dataset_classified.csv"
 DEFAULT_PARTICIPANT_READY_SOURCE_PATH = "data/datasets/classified/dataset_participant_ready.csv"
+DEFAULT_CLASSIFIED_ARCHIVE_PATH = "tools/domain_classification/dataset_classified.zip"
 LOCAL_LLM_BASE_URL = "http://127.0.0.1:11434"
 KIT_BUILDER_CACHE_PATH = REPO_ROOT / "gui" / ".cache" / "kit_builder_state.json"
 SUPPORTED_LLM_PROVIDERS = ["ollama"]
@@ -50,6 +53,46 @@ def _default_kit_source_path() -> str:
     if participant_ready.exists():
         return DEFAULT_PARTICIPANT_READY_SOURCE_PATH
     return DEFAULT_CLASSIFIED_SOURCE_PATH
+
+
+def _repo_path(path_text: str) -> Path:
+    """Resolve a GUI path relative to the repository root."""
+    path = Path(path_text)
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
+def _restore_bundled_classified_dataset(source_path: Path) -> bool:
+    """Unpack the checked-in dataset archive when its default CSV is absent."""
+    expected_path = (REPO_ROOT / DEFAULT_CLASSIFIED_SOURCE_PATH).resolve()
+    if source_path.resolve() != expected_path:
+        return False
+
+    archive_path = REPO_ROOT / DEFAULT_CLASSIFIED_ARCHIVE_PATH
+    if not archive_path.is_file():
+        return False
+
+    temp_path = expected_path.with_suffix(expected_path.suffix + ".tmp")
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            members = [
+                member
+                for member in archive.infolist()
+                if not member.is_dir() and Path(member.filename).name == expected_path.name
+            ]
+            if len(members) != 1:
+                raise ValueError(
+                    f"Expected one {expected_path.name} entry in {archive_path.name}, found {len(members)}."
+                )
+
+            expected_path.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(members[0]) as source, temp_path.open("wb") as target:
+                shutil.copyfileobj(source, target)
+        temp_path.replace(expected_path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+    return True
 
 
 def _load_expertise_labels(path: Path) -> list[str]:
@@ -908,9 +951,14 @@ class KitBuilderGUI(tk.Tk):
         try:
             participant_ids = self._build_participant_ids()
             out_root = Path(self.out_root_var.get().strip())
-            metadata_csv = Path(self.metadata_var.get().strip())
+            metadata_csv = _repo_path(self.metadata_var.get().strip())
             if not metadata_csv.exists():
-                raise FileNotFoundError(f"Metadata CSV not found: {metadata_csv}")
+                restored = _restore_bundled_classified_dataset(metadata_csv)
+                if not restored:
+                    raise FileNotFoundError(
+                        f"Metadata CSV not found: {self.metadata_var.get().strip()}. "
+                        "Choose an available source CSV or restore the classified dataset archive."
+                    )
             conflicts = self._validate_before_create(participant_ids)
             if conflicts and not self.overwrite_var.get():
                 listed = "\n".join(conflicts)

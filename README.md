@@ -106,6 +106,8 @@ If you already have `python` or `py` pointing at Python `3.10`, use that instead
 
 If you want to use Dropbox for kit delivery and return collection, create a local `.env` at the repo root from `.env.example`. Keep that file on the researcher machine only.
 
+The large classified dataset is stored in the repository as `tools/domain_classification/dataset_classified.zip`. On a fresh clone, the kit builder unpacks it to `data/datasets/classified/dataset_classified.csv` when you first create a kit with the default source. The extracted CSV stays local and is ignored by Git.
+
 ## LLM Endpoints
 
 There are two LLM settings in this repo:
